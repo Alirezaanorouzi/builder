@@ -1,0 +1,15 @@
+node_modules
+.next
+.data
+*.log
+
+# Secrets — never commit
+.env
+.env.local
+.env.*.local
+engines/opencode/docker/.env
+template/.env.local
+
+# Keep examples
+!.env.example
+!engines/opencode/docker/.env.example

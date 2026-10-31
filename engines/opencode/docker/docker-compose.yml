@@ -1,0 +1,32 @@
+services:
+  opencode:
+    build: .
+    image: builder-opencode-local:latest
+    container_name: builder-opencode
+    working_dir: /workspace
+    ports:
+      - "4096:4096"
+    environment:
+      OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:-builder-dev-secret}
+      OPENCODE_SERVER_USERNAME: ${OPENCODE_SERVER_USERNAME:-opencode}
+      OPENCODE_PORT: "4096"
+      WORKSPACE_DIR: /workspace
+      TEMPLATE_REPO_URL: ${TEMPLATE_REPO_URL:-}
+      TEMPLATE_REPO_REF: ${TEMPLATE_REPO_REF:-main}
+      # Git only — do NOT pass as GITHUB_TOKEN (OpenCode would treat it as GitHub Copilot).
+      TEMPLATE_REPO_TOKEN: ${TEMPLATE_REPO_TOKEN:-${GITHUB_TOKEN:-}}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # Must match a GitHub/Vercel team member (avoids "Deployment was blocked")
+      TEMPLATE_REPO_GIT_NAME: ${TEMPLATE_REPO_GIT_NAME:-Website Builder}
+      TEMPLATE_REPO_GIT_EMAIL: ${TEMPLATE_REPO_GIT_EMAIL:-}
+    volumes:
+      - opencode_workspace:/workspace
+      - ./entrypoint.sh:/entrypoint.sh:ro
+      - ./opencode.json:/etc/opencode/opencode.json:ro
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    restart: unless-stopped
+
+volumes:
+  opencode_workspace:
