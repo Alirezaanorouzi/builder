@@ -23,6 +23,7 @@ services:
       TEMPLATE_REPO_GIT_EMAIL: ${TEMPLATE_REPO_GIT_EMAIL:-}
     volumes:
       - opencode_workspace:/workspace
+      - opencode_workspaces:/workspaces
       - ./entrypoint.sh:/entrypoint.sh:ro
       - ./opencode.json:/etc/opencode/opencode.json:ro
     entrypoint: ["/bin/sh", "/entrypoint.sh"]
@@ -30,3 +31,4 @@ services:
 
 volumes:
   opencode_workspace:
+  opencode_workspaces:

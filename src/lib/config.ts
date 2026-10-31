@@ -47,9 +47,14 @@ export function getConfig() {
 export function assertServerConfig() {
   const c = getConfig();
   const missing: string[] = [];
-  if (!c.templateRepoUrl) missing.push("TEMPLATE_REPO_URL");
+  const allowLegacy = process.env.ALLOW_SHARED_MVP_FALLBACK === "1";
+
+  if (allowLegacy) {
+    if (!c.templateRepoUrl) missing.push("TEMPLATE_REPO_URL");
+    if (!c.vercelProjectId) missing.push("VERCEL_PROJECT_ID");
+  }
+
   if (!c.vercelToken) missing.push("VERCEL_TOKEN");
-  if (!c.vercelProjectId) missing.push("VERCEL_PROJECT_ID");
 
   if (c.codingEngine === "cursor") {
     try {

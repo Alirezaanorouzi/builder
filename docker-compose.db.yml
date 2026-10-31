@@ -1,0 +1,25 @@
+# Local PostgreSQL for development (same protocol as Neon — swap DATABASE_URL in production).
+# Start: docker compose -f docker-compose.db.yml up -d
+# Neon: use your branch connection string in .env.local instead of this URL.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: builder-postgres
+    restart: unless-stopped
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_USER: builder
+      POSTGRES_PASSWORD: builder
+      POSTGRES_DB: builder
+    volumes:
+      - builder_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U builder -d builder"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  builder_pg_data:

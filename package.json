@@ -4,11 +4,19 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "prisma generate && next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "worker": "tsx scripts/build-worker.ts",
+    "db:up": "docker compose -f docker-compose.db.yml up -d",
+    "db:down": "docker compose -f docker-compose.db.yml down",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:push": "prisma db push"
   },
   "dependencies": {
+    "@prisma/client": "^6.9.0",
+    "better-auth": "^1.2.8",
     "next": "15.5.28",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
@@ -20,6 +28,9 @@
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "dotenv": "^16.4.7",
+    "prisma": "^6.9.0",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.0"
   }
 }

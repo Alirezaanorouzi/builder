@@ -1,0 +1,187 @@
+// Control plane + Better Auth (Phase 2)
+// Local: docker compose -f docker-compose.db.yml up -d
+// Prod:  DATABASE_URL from Neon (https://neon.tech)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SiteStatus {
+  provisioning
+  active
+  failed
+  suspended
+}
+
+enum ProvisioningStep {
+  pending_github_repo
+  github_repo_created
+  pending_vercel_project
+  vercel_project_created
+  pending_initial_deploy
+  complete
+}
+
+enum CodingEngine {
+  cursor
+  opencode
+}
+
+enum BuildRunStatus {
+  queued
+  preparing_workspace
+  running
+  pushing
+  deploying
+  succeeded
+  failed
+  cancelled
+}
+
+// Better Auth core user — id matches auth session user id
+model User {
+  id            String    @id
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  sessions      Session[]
+  accounts      Account[]
+  sites         Site[]
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+}
+
+model Verification {
+  id         String    @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([identifier])
+}
+
+model Site {
+  id          String     @id @default(cuid())
+  userId      String
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  slug        String
+  displayName String
+  status      SiteStatus @default(provisioning)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  resources    SiteResources?
+  chatSessions ChatSession[]
+  buildRuns    BuildRun[]
+
+  @@unique([userId, slug])
+  @@index([userId])
+}
+
+model SiteResources {
+  id                  String           @id @default(cuid())
+  siteId              String           @unique
+  site                Site             @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  provisioningStep    ProvisioningStep @default(pending_github_repo)
+  provisioningError   String?
+  githubRepoId        String?
+  githubRepoFullName  String?
+  githubDefaultBranch String           @default("main")
+  vercelProjectId     String?
+  vercelTeamId        String?
+  productionUrl       String?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+}
+
+model ChatSession {
+  id            String       @id @default(cuid())
+  siteId        String
+  site          Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  engine        CodingEngine @default(opencode)
+  engineAgentId String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  buildRuns     BuildRun[]
+
+  @@index([siteId])
+}
+
+model BuildRun {
+  id            String         @id @default(cuid())
+  siteId        String
+  site          Site           @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  chatSessionId String
+  chatSession   ChatSession    @relation(fields: [chatSessionId], references: [id], onDelete: Cascade)
+  engine        CodingEngine
+  engineRunId   String?
+  status        BuildRunStatus @default(queued)
+  workspaceId   String?
+  userMessage   String
+  commitSha     String?
+  deploymentId  String?
+  deployUrl     String?
+  errorMessage  String?
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  events        BuildEvent[]
+
+  @@index([siteId, status])
+  @@index([chatSessionId])
+  @@index([status, createdAt])
+}
+
+model BuildEvent {
+  id         String   @id @default(cuid())
+  buildRunId String
+  buildRun   BuildRun @relation(fields: [buildRunId], references: [id], onDelete: Cascade)
+  eventType  String
+  payload    Json?
+  message    String?
+  createdAt  DateTime @default(now())
+
+  @@index([buildRunId, createdAt])
+}

@@ -5,12 +5,14 @@ import type {
   EngineStreamResult,
   StartRunInput,
   StartRunResult,
+  TenantContext,
 } from "../types";
 import {
   createSession,
   healthCheck,
   newOpenCodeMessageId,
   parseOpencodeModel,
+  prepareSiteWorkspace,
   promptAsync,
   pushGitChanges,
   watchOpenCodeSession,
@@ -21,12 +23,18 @@ export const opencodeEngineProvider: CodingEngineProvider = {
 
   async startRun(input: StartRunInput): Promise<StartRunResult> {
     await healthCheck();
-
+    const tenant = input.tenant;
+    const dir = tenant.workspaceDirectory;
     const runId = newOpenCodeMessageId();
+
+    if (tenant.dedicated) {
+      const bootstrap = await createSession("Workspace bootstrap");
+      await prepareSiteWorkspace(bootstrap.id, tenant);
+    }
 
     if (input.agentId) {
       try {
-        await promptAsync(input.agentId, input.promptText, runId);
+        await promptAsync(input.agentId, input.promptText, runId, dir);
         return { agentId: input.agentId, runId };
       } catch (e) {
         const msg = e instanceof Error ? e.message : "";
@@ -38,8 +46,8 @@ export const opencodeEngineProvider: CodingEngineProvider = {
       }
     }
 
-    const session = await createSession("Website builder");
-    await promptAsync(session.id, input.promptText, runId);
+    const session = await createSession("Website builder", dir);
+    await promptAsync(session.id, input.promptText, runId, dir);
     return { agentId: session.id, runId };
   },
 
@@ -47,6 +55,7 @@ export const opencodeEngineProvider: CodingEngineProvider = {
     agentId: string,
     _runId: string,
     _startedAt: number,
+    tenant: TenantContext,
     onEvent: (event: EngineStreamEvent) => void
   ): Promise<EngineStreamResult> {
     const cfg = getConfig();
@@ -60,7 +69,8 @@ export const opencodeEngineProvider: CodingEngineProvider = {
       agentId,
       cfg.opencodeMaxWaitMs,
       (message) => onEvent({ type: "activity", message }),
-      (message) => onEvent({ type: "error", message })
+      (message) => onEvent({ type: "error", message }),
+      tenant.workspaceDirectory
     );
 
     if (outcome === "timeout") {
@@ -77,8 +87,9 @@ export const opencodeEngineProvider: CodingEngineProvider = {
     }
 
     onEvent({ type: "status", message: "Pushing changes to GitHub…" });
+    let commitSha: string | undefined;
     try {
-      await pushGitChanges(agentId, cfg.templateRepoRef);
+      commitSha = await pushGitChanges(agentId, tenant);
     } catch (e) {
       onEvent({
         type: "error",
@@ -93,7 +104,7 @@ export const opencodeEngineProvider: CodingEngineProvider = {
       message:
         "If Vercel shows “Deployment was blocked”, the GitHub repo must be linked to the same Vercel account as the commit author (Hobby + private repo). See README troubleshooting.",
     });
-    return { finished: true, requestPreview: true };
+    return { finished: true, requestPreview: true, commitSha };
   },
 };
 

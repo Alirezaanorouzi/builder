@@ -20,15 +20,20 @@ async function parseError(res: Response): Promise<string> {
   }
 }
 
-export async function createAgentWithRun(promptText: string): Promise<CreateAgentResult> {
+import type { TenantContext } from "../types";
+
+export async function createAgentWithRun(
+  promptText: string,
+  tenant: TenantContext
+): Promise<CreateAgentResult> {
   const cfg = getConfig();
   const body: Record<string, unknown> = {
     name: "Website builder session",
     prompt: { text: promptText },
     repos: [
       {
-        url: cfg.templateRepoUrl,
-        startingRef: cfg.templateRepoRef,
+        url: tenant.repoUrl,
+        startingRef: tenant.repoRef,
       },
     ],
     workOnCurrentBranch: true,

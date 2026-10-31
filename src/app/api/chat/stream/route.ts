@@ -1,12 +1,22 @@
 import { NextRequest } from "next/server";
 import { assertServerConfig } from "@/lib/config";
-import { getCodingEngine } from "@engines/index";
-import { getSession } from "@/lib/store";
-import { waitForPreviewUrl } from "@/lib/vercel";
-import type { EngineStreamEvent } from "@engines/types";
+import {
+  assertBuildRunAccess,
+  jsonError,
+  requireSessionUser,
+} from "@/lib/access";
+import { prisma } from "@/lib/db";
+import {
+  listBuildEventsSince,
+  TERMINAL_BUILD_STATUSES,
+} from "@/lib/build-runs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 function sseEncode(event: string, data: unknown, id?: string): string {
   let chunk = "";
@@ -16,17 +26,34 @@ function sseEncode(event: string, data: unknown, id?: string): string {
   return chunk;
 }
 
-function mapEngineEvent(event: EngineStreamEvent): { name: string; data: unknown } {
-  switch (event.type) {
-    case "status":
-      return { name: "status", data: { message: event.message } };
-    case "assistant":
-      return { name: "assistant", data: { text: event.text } };
-    case "activity":
-      return { name: "activity", data: { message: event.message } };
-    case "error":
-      return { name: "error", data: { message: event.message } };
+function pushEventFromRow(
+  push: (event: string, data: unknown) => void,
+  row: { eventType: string; message: string | null; payload: unknown }
+) {
+  const type = row.eventType;
+  if (type === "assistant") {
+    const payload = row.payload as { text?: string } | null;
+    push("assistant", { text: payload?.text ?? row.message ?? "" });
+    return;
   }
+  if (type === "preview") {
+    const payload = row.payload as { url?: string } | null;
+    if (payload?.url) push("preview", { url: payload.url });
+    return;
+  }
+  if (type === "done") {
+    push("done", {});
+    return;
+  }
+  if (type === "error") {
+    push("error", { message: row.message ?? "Error" });
+    return;
+  }
+  if (type === "status" || type === "activity") {
+    push(type, { message: row.message ?? "" });
+    return;
+  }
+  push("status", { message: row.message ?? type });
 }
 
 export async function GET(req: NextRequest) {
@@ -37,73 +64,69 @@ export async function GET(req: NextRequest) {
     return new Response(message, { status: 500 });
   }
 
-  const sessionId = req.nextUrl.searchParams.get("sessionId");
-  const runId = req.nextUrl.searchParams.get("runId");
-  const startedAtParam = req.nextUrl.searchParams.get("startedAt");
-  const startedAt = startedAtParam ? Number(startedAtParam) : Date.now();
-
-  if (!sessionId || !runId) {
-    return new Response("sessionId and runId are required", { status: 400 });
+  const buildRunId = req.nextUrl.searchParams.get("buildRunId");
+  if (!buildRunId) {
+    return new Response("buildRunId is required", { status: 400 });
   }
 
-  const session = getSession(sessionId);
-  if (!session?.agentId) {
-    return new Response("Unknown session", { status: 404 });
-  }
+  try {
+    const user = await requireSessionUser();
+    await assertBuildRunAccess(user.id, buildRunId);
 
-  const engine = getCodingEngine();
-  const agentId = session.agentId;
+    const stream = new ReadableStream({
+      async start(controller) {
+        const encoder = new TextEncoder();
+        const push = (event: string, data: unknown) => {
+          controller.enqueue(encoder.encode(sseEncode(event, data)));
+        };
 
-  const stream = new ReadableStream({
-    async start(controller) {
-      const encoder = new TextEncoder();
-      const push = (event: string, data: unknown) => {
-        controller.enqueue(encoder.encode(sseEncode(event, data)));
-      };
+        let lastCreatedAt: Date | undefined;
+        let terminal = false;
 
-      try {
-        const result = await engine.streamRun(agentId, runId, startedAt, (ev) => {
-          const mapped = mapEngineEvent(ev);
-          push(mapped.name, mapped.data);
-        });
-
-        if (result.requestPreview) {
-          try {
-            const preview = await waitForPreviewUrl({ sinceMs: startedAt });
-            if (preview.note) {
-              push("status", { message: preview.note });
+        try {
+          for (;;) {
+            const events = await listBuildEventsSince(buildRunId, lastCreatedAt);
+            for (const row of events) {
+              pushEventFromRow(push, row);
+              lastCreatedAt = row.createdAt;
+              if (row.eventType === "done") terminal = true;
             }
-            if (preview.url) {
-              push("preview", { url: preview.url });
-            } else {
-              push("status", {
-                message:
-                  "Build finished but no new Vercel deployment yet. Check Vercel dashboard or retry in a minute.",
-              });
-            }
-          } catch (e) {
-            push("error", {
-              message: e instanceof Error ? e.message : "Failed to fetch Vercel URL",
+
+            const run = await prisma.buildRun.findUnique({
+              where: { id: buildRunId },
             });
+            if (!run) break;
+
+            if (
+              TERMINAL_BUILD_STATUSES.includes(run.status) &&
+              (terminal || events.some((e) => e.eventType === "done"))
+            ) {
+              if (!terminal) push("done", {});
+              break;
+            }
+
+            if (terminal) break;
+
+            await sleep(800);
           }
+        } catch (e) {
+          push("error", {
+            message: e instanceof Error ? e.message : "Stream error",
+          });
+        } finally {
+          controller.close();
         }
+      },
+    });
 
-        push("done", {});
-      } catch (e) {
-        push("error", {
-          message: e instanceof Error ? e.message : "Stream error",
-        });
-      } finally {
-        controller.close();
-      }
-    },
-  });
-
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-    },
-  });
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+      },
+    });
+  } catch (e) {
+    return jsonError(e);
+  }
 }

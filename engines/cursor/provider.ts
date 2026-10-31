@@ -5,6 +5,7 @@ import type {
   EngineStreamResult,
   StartRunInput,
   StartRunResult,
+  TenantContext,
 } from "../types";
 import {
   createAgentWithRun,
@@ -100,7 +101,7 @@ export const cursorEngineProvider: CodingEngineProvider = {
 
   async startRun(input: StartRunInput): Promise<StartRunResult> {
     if (!input.agentId) {
-      return createAgentWithRun(input.promptText);
+      return createAgentWithRun(input.promptText, input.tenant);
     }
     const { runId } = await sendFollowUpRun(input.agentId, input.promptText);
     return { agentId: input.agentId, runId };
@@ -110,6 +111,7 @@ export const cursorEngineProvider: CodingEngineProvider = {
     agentId: string,
     runId: string,
     _startedAt: number,
+    _tenant: TenantContext,
     onEvent: (event: EngineStreamEvent) => void
   ): Promise<EngineStreamResult> {
     onEvent({ type: "status", message: "Connected to Cursor build agent…" });

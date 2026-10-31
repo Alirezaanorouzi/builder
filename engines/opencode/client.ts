@@ -21,11 +21,17 @@ async function parseError(res: Response): Promise<string> {
   }
 }
 
-export async function opencodeFetch(
+async function opencodeFetch(
   path: string,
-  init?: RequestInit
+  init?: RequestInit,
+  directory?: string
 ): Promise<Response> {
-  const url = `${baseUrl()}${path.startsWith("/") ? path : `/${path}`}`;
+  let urlPath = path.startsWith("/") ? path : `/${path}`;
+  if (directory) {
+    const sep = urlPath.includes("?") ? "&" : "?";
+    urlPath += `${sep}directory=${encodeURIComponent(directory)}`;
+  }
+  const url = `${baseUrl()}${urlPath}`;
   return fetch(url, {
     ...init,
     headers: {
@@ -47,12 +53,18 @@ export interface OpencodeSession {
   title?: string;
 }
 
-export async function createSession(title: string): Promise<OpencodeSession> {
-  const res = await opencodeFetch("/session", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title }),
-  });
+import type { TenantContext } from "../types";
+
+export async function createSession(title: string, directory?: string): Promise<OpencodeSession> {
+  const res = await opencodeFetch(
+    "/session",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    },
+    directory
+  );
   if (!res.ok) {
     throw new Error(`OpenCode create session failed (${res.status}): ${await parseError(res)}`);
   }
@@ -70,18 +82,27 @@ export function parseOpencodeModel(slug: string): { providerID: string; modelID:
   return { providerID: s.slice(0, i), modelID: s.slice(i + 1) };
 }
 
-export async function promptAsync(sessionId: string, text: string, messageId: string): Promise<void> {
+export async function promptAsync(
+  sessionId: string,
+  text: string,
+  messageId: string,
+  directory?: string
+): Promise<void> {
   const cfg = getConfig();
-  const res = await opencodeFetch(`/session/${sessionId}/prompt_async`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      messageID: messageId,
-      agent: "build",
-      model: parseOpencodeModel(cfg.opencodeModel),
-      parts: [{ type: "text", text }],
-    }),
-  });
+  const res = await opencodeFetch(
+    `/session/${sessionId}/prompt_async`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messageID: messageId,
+        agent: "build",
+        model: parseOpencodeModel(cfg.opencodeModel),
+        parts: [{ type: "text", text }],
+      }),
+    },
+    directory
+  );
   if (!res.ok) {
     throw new Error(`OpenCode prompt failed (${res.status}): ${await parseError(res)}`);
   }
@@ -92,8 +113,8 @@ type SessionStatusMap = Record<
   { type?: string; status?: string; running?: boolean } | string
 >;
 
-export async function getSessionStatus(sessionId: string): Promise<string> {
-  const res = await opencodeFetch("/session/status");
+export async function getSessionStatus(sessionId: string, directory?: string): Promise<string> {
+  const res = await opencodeFetch("/session/status", undefined, directory);
   if (!res.ok) {
     throw new Error(`OpenCode status failed (${res.status}): ${await parseError(res)}`);
   }
@@ -170,7 +191,8 @@ export async function watchOpenCodeSession(
   sessionId: string,
   deadlineMs: number,
   onActivity: (message: string) => void,
-  onError: (message: string) => void
+  onError: (message: string) => void,
+  directory?: string
 ): Promise<OpenCodeRunOutcome> {
   const deadline = Date.now() + deadlineMs;
   let outcome: OpenCodeRunOutcome | null = null;
@@ -180,7 +202,7 @@ export async function watchOpenCodeSession(
 
   const pollStatus = async () => {
     while (!outcome && Date.now() < deadline) {
-      const status = (await getSessionStatus(sessionId)).toLowerCase();
+      const status = (await getSessionStatus(sessionId, directory)).toLowerCase();
       if (status.includes("busy") || status.includes("run")) {
         sawBusy = true;
       } else if (sawBusy && (status === "idle" || status.includes("idle"))) {
@@ -219,9 +241,13 @@ export async function watchOpenCodeSession(
   const readEvents = async () => {
     for (const path of eventPaths) {
       if (outcome) return;
-      const res = await opencodeFetch(path, {
-        headers: { Accept: "text/event-stream" },
-      });
+      const res = await opencodeFetch(
+        path,
+        {
+          headers: { Accept: "text/event-stream" },
+        },
+        directory
+      );
       if (!res.ok || !res.body) continue;
 
       const reader = res.body.getReader();
@@ -272,29 +298,99 @@ export async function watchOpenCodeSession(
   return outcome ?? "timeout";
 }
 
-export async function pushGitChanges(sessionId: string, ref: string): Promise<void> {
-  // Runs inside the OpenCode container; uses TEMPLATE_REPO_GIT_* from docker compose env.
+async function readShellStdout(res: Response): Promise<string> {
+  const text = await res.text();
+  try {
+    const json = JSON.parse(text) as { output?: string; stdout?: string; data?: string };
+    return (json.output ?? json.stdout ?? json.data ?? text).trim();
+  } catch {
+    return text.trim();
+  }
+}
+
+/** Clone or update the site's GitHub repo under workspaceDirectory (inside OpenCode container). */
+export async function prepareSiteWorkspace(
+  sessionId: string,
+  tenant: TenantContext
+): Promise<void> {
+  const dir = tenant.workspaceDirectory;
+  const ref = tenant.repoRef;
+  const repoUrl = tenant.repoUrl;
+  const parent = dir.replace(/\/[^/]+$/, "") || "/workspaces";
+  const cmd = [
+    `mkdir -p "${parent}"`,
+    `if [ ! -d "${dir}/.git" ]; then`,
+    `  CLONE_URL="${repoUrl}"`,
+    `  if [ -n "$TEMPLATE_REPO_TOKEN" ]; then CLONE_URL=$(echo "${repoUrl}" | sed "s#https://#https://x-access-token:\${TEMPLATE_REPO_TOKEN}@#"); fi`,
+    `  git clone --depth 1 --branch "${ref}" "$CLONE_URL" "${dir}"`,
+    `else`,
+    `  cd "${dir}" && git fetch origin "${ref}" && git checkout "${ref}" && git pull origin "${ref}" || true`,
+    `fi`,
+  ].join(" ");
+  const res = await opencodeFetch(
+    `/session/${sessionId}/shell`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent: "build", command: cmd }),
+    },
+    tenant.workspaceDirectory
+  );
+  if (!res.ok) {
+    throw new Error(`OpenCode workspace prepare failed (${res.status}): ${await parseError(res)}`);
+  }
+}
+
+export async function cleanupBuildWorkspace(tenant: TenantContext): Promise<void> {
+  const bootstrap = await createSession("Workspace cleanup");
+  const cmd = `rm -rf "${tenant.workspaceDirectory}"`;
+  const res = await opencodeFetch(`/session/${bootstrap.id}/shell`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agent: "build", command: cmd }),
+  });
+  if (!res.ok) {
+    throw new Error(`OpenCode workspace cleanup failed (${res.status}): ${await parseError(res)}`);
+  }
+}
+
+export async function pushGitChanges(
+  sessionId: string,
+  tenant: TenantContext
+): Promise<string | undefined> {
+  const dir = tenant.workspaceDirectory;
+  const ref = tenant.repoRef;
   const authorFlags =
     'git -c user.email="${TEMPLATE_REPO_GIT_EMAIL}" -c user.name="${TEMPLATE_REPO_GIT_NAME:-Website Builder}"';
   const cmd = [
+    `cd "${dir}"`,
     "git add -A",
     'if git diff --staged --quiet; then true; else',
     `${authorFlags} commit -m "Website builder update"; fi`,
-    // Agent may have committed with a wrong author — rewrite HEAD before push (Vercel Hobby checks author).
     `${authorFlags} commit --amend --reset-author --no-edit 2>/dev/null || true`,
     `git push origin ${ref}`,
+    `git rev-parse HEAD`,
   ].join(" && ");
-  const res = await opencodeFetch(`/session/${sessionId}/shell`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      agent: "build",
-      command: cmd,
-    }),
-  });
+  const res = await opencodeFetch(
+    `/session/${sessionId}/shell`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        agent: "build",
+        command: cmd,
+      }),
+    },
+    tenant.workspaceDirectory
+  );
   if (!res.ok) {
     throw new Error(`OpenCode git push failed (${res.status}): ${await parseError(res)}`);
   }
+  const out = await readShellStdout(res);
+  const lines = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const last = lines[lines.length - 1];
+  if (last && /^[a-f0-9]{7,40}$/i.test(last)) return last;
+  return undefined;
 }
 
 export function sleep(ms: number) {
