@@ -90,7 +90,6 @@ export async function updateBuildRunStatus(
   status: BuildRunStatus,
   patch?: {
     engineRunId?: string;
-    workspaceId?: string;
     commitSha?: string;
     deploymentId?: string;
     deployUrl?: string;

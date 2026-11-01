@@ -8,9 +8,8 @@ import {
 } from "@/lib/build-runs";
 import { resolveTenantContext } from "@/lib/site-runtime";
 import type { TenantContext } from "@engines/types";
-import { setChatSessionEngineAgentId } from "@/lib/sites";
-import { waitForDeployment } from "@/lib/vercel";
-import { cleanupBuildWorkspace } from "@engines/opencode/client";
+import { setChatSessionEngineAgentId, setSiteCursorAgentId } from "@/lib/sites";
+import { waitForDeployment } from "@/services/vercel.service";
 
 export async function executeBuildRun(buildRunId: string): Promise<void> {
   const run = await prisma.buildRun.findUnique({
@@ -25,10 +24,9 @@ export async function executeBuildRun(buildRunId: string): Promise<void> {
   let tenant: TenantContext | undefined;
 
   try {
-    tenant = resolveTenantContext(run.site, run.id);
+    tenant = resolveTenantContext(run.site);
 
     await updateBuildRunStatus(buildRunId, "preparing_workspace", {
-      workspaceId: tenant.workspaceDirectory,
       startedAt: run.startedAt ?? new Date(),
     });
     await appendBuildEvent(buildRunId, "status", {
@@ -43,12 +41,18 @@ export async function executeBuildRun(buildRunId: string): Promise<void> {
       message: `Starting ${engine.id} agent…`,
     });
 
+    const existingAgentId =
+      run.site.resources?.cursorAgentId ?? run.chatSession.engineAgentId;
+
     const { agentId, runId: engineRunId } = await engine.startRun({
       promptText,
-      agentId: run.chatSession.engineAgentId,
+      agentId: existingAgentId,
       tenant,
     });
 
+    if (run.site.resources?.cursorAgentId !== agentId) {
+      await setSiteCursorAgentId(run.site.id, agentId);
+    }
     if (run.chatSession.engineAgentId !== agentId) {
       await setChatSessionEngineAgentId(run.chatSession.id, agentId);
     }
@@ -136,13 +140,6 @@ export async function executeBuildRun(buildRunId: string): Promise<void> {
       finishedAt: new Date(),
     });
   } finally {
-    if (tenant?.dedicated) {
-      try {
-        await cleanupBuildWorkspace(tenant);
-      } catch {
-        /* best-effort */
-      }
-    }
     await appendBuildEvent(buildRunId, "done", {});
   }
 }

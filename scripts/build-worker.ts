@@ -1,5 +1,5 @@
 /**
- * Execution plane worker — run alongside Next.js dev:
+ * Unified worker — builds + provisioning (run alongside Next.js dev):
  *   npm run worker
  */
 import { config } from "dotenv";

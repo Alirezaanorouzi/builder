@@ -1,6 +1,7 @@
 import { assertSiteAccess, jsonError, requireSessionUser } from "@/lib/access";
 import { prisma } from "@/lib/db";
-import { enqueueSiteProvisioning } from "@/lib/provisioning/runner";
+import { enqueueSiteProvisioning } from "@/services/provisioning.service";
+import { processOneWorkerTick } from "@/lib/build-worker";
 import { serializeSiteForClient } from "@/lib/sites";
 
 export const runtime = "nodejs";
@@ -23,6 +24,9 @@ export async function POST(_req: Request, { params }: Params) {
     });
 
     enqueueSiteProvisioning(id);
+    if (process.env.INLINE_BUILD_WORKER === "1") {
+      void processOneWorkerTick();
+    }
 
     const site = await assertSiteAccess(user.id, id);
     return Response.json({ site: serializeSiteForClient(site) });

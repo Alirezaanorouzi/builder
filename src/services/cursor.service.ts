@@ -20,7 +20,7 @@ async function parseError(res: Response): Promise<string> {
   }
 }
 
-import type { TenantContext } from "../types";
+import type { TenantContext } from "@engines/types";
 
 export async function createAgentWithRun(
   promptText: string,

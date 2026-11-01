@@ -7,6 +7,13 @@ import {
   useState,
   type CSSProperties,
 } from "react";
+import { useRouter } from "next/navigation";
+import { signOutBuilderAccount } from "@/lib/sign-out";
+import {
+  BUILDER_BUILD_RUN_KEY,
+  BUILDER_CHAT_SESSION_KEY,
+  BUILDER_SITE_ID_KEY,
+} from "@/lib/builder-client-storage";
 
 type ChatLine =
   | { kind: "user"; text: string }
@@ -16,9 +23,9 @@ type ChatLine =
   | { kind: "preview"; url: string }
   | { kind: "error"; text: string };
 
-const CHAT_SESSION_KEY = "builder_chat_session_id";
-const SITE_ID_KEY = "builder_site_id";
-const BUILD_RUN_KEY = "builder_build_run_id";
+const CHAT_SESSION_KEY = BUILDER_CHAT_SESSION_KEY;
+const SITE_ID_KEY = BUILDER_SITE_ID_KEY;
+const BUILD_RUN_KEY = BUILDER_BUILD_RUN_KEY;
 
 type SiteSummary = {
   id: string;
@@ -28,6 +35,8 @@ type SiteSummary = {
 };
 
 export function Chat() {
+  const router = useRouter();
+  const [userEmail, setUserEmail] = useState<string | null>(null);
   const [siteId, setSiteId] = useState<string | null>(null);
   const [siteStatus, setSiteStatus] = useState<string | null>(null);
   const [provisioningError, setProvisioningError] = useState<string | null>(null);
@@ -36,13 +45,20 @@ export function Chat() {
   const [lines, setLines] = useState<ChatLine[]>([]);
   const [busy, setBusy] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
+  const [retryingProvision, setRetryingProvision] = useState(false);
+  const [previewMode, setPreviewMode] = useState<"desktop" | "mobile">("desktop");
   const bottomRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
 
   const loadMe = useCallback(async () => {
     const res = await fetch("/api/me");
     if (!res.ok) return null;
-    const data = (await res.json()) as { sites?: SiteSummary[] };
+    const data = (await res.json()) as {
+      user?: { email?: string };
+      sites?: SiteSummary[];
+    };
+    if (data.user?.email) setUserEmail(data.user.email);
     const sites = data.sites ?? [];
     const stored = localStorage.getItem(SITE_ID_KEY);
     const active =
@@ -140,7 +156,7 @@ export function Chat() {
   }, [loadMe, startStream]);
 
   useEffect(() => {
-    if (siteStatus !== "provisioning") return;
+    if (siteStatus !== "provisioning" && siteStatus !== "failed") return;
     const timer = window.setInterval(() => {
       void loadMe();
     }, 4000);
@@ -153,6 +169,57 @@ export function Chat() {
 
   useEffect(() => () => closeStream(), [closeStream]);
 
+  const retryProvisioning = async () => {
+    if (!siteId || retryingProvision) return;
+    setRetryingProvision(true);
+    setSiteStatus("provisioning");
+    setProvisioningError(null);
+    try {
+      const res = await fetch(`/api/sites/${siteId}/provision`, { method: "POST" });
+      const data = (await res.json()) as { error?: string; site?: SiteSummary };
+      if (!res.ok) {
+        setSiteStatus("failed");
+        setProvisioningError(data.error ?? "Retry failed");
+        return;
+      }
+      if (data.site) {
+        setSiteStatus(data.site.status);
+        setProvisioningError(data.site.provisioningError ?? null);
+      }
+      void loadMe();
+    } catch (e) {
+      setSiteStatus("failed");
+      setProvisioningError(e instanceof Error ? e.message : "Retry failed");
+    } finally {
+      setRetryingProvision(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    if (signingOut) return;
+    setSigningOut(true);
+    closeStream();
+    setBusy(false);
+    try {
+      const result = await signOutBuilderAccount();
+      if (!result.ok) {
+        appendLine({ kind: "error", text: result.message });
+        return;
+      }
+      setUserEmail(null);
+      setSiteId(null);
+      setSiteStatus(null);
+      setProvisioningError(null);
+      setChatSessionId(null);
+      setLines([]);
+      setPreviewUrl(null);
+      router.push("/sign-in");
+      router.refresh();
+    } finally {
+      setSigningOut(false);
+    }
+  };
+
   const send = async () => {
     const text = input.trim();
     if (!text || busy) return;
@@ -162,7 +229,10 @@ export function Chat() {
         text:
           siteStatus === "provisioning"
             ? "Your site is still being set up (GitHub + Vercel). Wait a moment…"
-            : provisioningError ?? "Site is not ready. Fix provisioning and try again.",
+            : provisioningError ??
+              (siteStatus === "failed"
+                ? "Site setup failed or is still finishing. Use “Retry GitHub + Vercel setup” in the header, or refresh the page."
+                : "Site is not ready. Fix provisioning and try again."),
       });
       return;
     }
@@ -214,15 +284,48 @@ export function Chat() {
   };
 
   return (
-    <div style={styles.shell}>
-      <header style={styles.header}>
-        <h1 style={styles.title}>Website Builder</h1>
-        <p style={styles.subtitle}>Describe your site — we build and deploy a preview.</p>
+    <div style={styles.page}>
+      <div style={styles.shell}>
+        <header style={styles.header}>
+        <div style={styles.headerRow}>
+          <div>
+            <h1 style={styles.title}>Website Builder</h1>
+            <p style={styles.subtitle}>Describe your site — we build and deploy a preview.</p>
+          </div>
+          {userEmail && (
+            <div style={styles.accountBar}>
+              <span style={styles.accountEmail} title={userEmail}>
+                {userEmail}
+              </span>
+              <button
+                type="button"
+                style={styles.signOutButton}
+                disabled={busy || signingOut}
+                onClick={() => void handleSignOut()}
+              >
+                {signingOut ? "Signing out…" : "Sign out"}
+              </button>
+            </div>
+          )}
+        </div>
         {siteStatus === "provisioning" && (
           <p style={styles.provisioning}>Setting up your GitHub repo and Vercel project…</p>
         )}
-        {siteStatus === "failed" && provisioningError && (
-          <p style={styles.provisioningError}>{provisioningError}</p>
+        {siteStatus === "failed" && (
+          <>
+            <p style={styles.provisioningError}>
+              {provisioningError ??
+                "Setup did not finish. Retry below, or refresh the page if GitHub and Vercel are already connected."}
+            </p>
+            <button
+              type="button"
+              style={styles.retryProvisionButton}
+              disabled={retryingProvision}
+              onClick={() => void retryProvisioning()}
+            >
+              {retryingProvision ? "Retrying setup…" : "Retry GitHub + Vercel setup"}
+            </button>
+          </>
         )}
       </header>
 
@@ -235,54 +338,103 @@ export function Chat() {
         </div>
       )}
 
-      <div style={styles.messages}>
-        {lines.length === 0 && (
-          <p style={styles.placeholder}>
-            Try: &quot;Build a small website for my dental clinic with hours and contact.&quot;
-          </p>
-        )}
-        {lines.map((line, i) => (
-          <div key={i} style={lineStyle(line)}>
-            {line.kind === "preview" ? (
-              <>
-                <strong>Your site is ready: </strong>
-                <a href={line.url} target="_blank" rel="noreferrer" style={styles.inlineLink}>
-                  Open preview
-                </a>
-              </>
-            ) : (
-              line.text
-            )}
-          </div>
-        ))}
-        {busy && <div style={styles.typing}>Working…</div>}
-        <div ref={bottomRef} />
+      <div style={styles.chatColumn}>
+        <div style={styles.messages}>
+          {lines.length === 0 && (
+            <p style={styles.placeholder}>
+              Try: &quot;Build a small website for my dental clinic with hours and contact.&quot;
+            </p>
+          )}
+          {lines.map((line, i) => (
+            <div key={i} style={lineStyle(line)}>
+              {line.kind === "preview" ? (
+                <>
+                  <strong>Your site is ready: </strong>
+                  <a href={line.url} target="_blank" rel="noreferrer" style={styles.inlineLink}>
+                    Open preview
+                  </a>
+                </>
+              ) : (
+                line.text
+              )}
+            </div>
+          ))}
+          {busy && <div style={styles.typing}>Working…</div>}
+          <div ref={bottomRef} />
+        </div>
+
+        <footer style={styles.footer}>
+          <textarea
+            style={styles.input}
+            rows={2}
+            placeholder="Describe changes to your website…"
+            value={input}
+            disabled={busy}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                void send();
+              }
+            }}
+          />
+          <button
+            type="button"
+            style={styles.button}
+            disabled={busy || !input.trim() || siteStatus !== "active"}
+            onClick={() => void send()}
+          >
+            {busy ? "Building…" : "Send"}
+          </button>
+        </footer>
+      </div>
       </div>
 
-      <footer style={styles.footer}>
-        <textarea
-          style={styles.input}
-          rows={2}
-          placeholder="Describe changes to your website…"
-          value={input}
-          disabled={busy}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              void send();
-            }
-          }}
-        />
-        <button
-          type="button"
-          style={styles.button}
-          disabled={busy || !input.trim() || siteStatus !== "active"}
-          onClick={() => void send()}
-        >
-          {busy ? "Building…" : "Send"}
-        </button>
-      </footer>
+      {previewUrl && (
+        <aside style={styles.previewPanel}>
+          <div style={styles.previewPanelHeader}>
+            <span style={styles.previewLabel}>Preview</span>
+            <div style={styles.previewModeToggle}>
+              <button
+                type="button"
+                style={{
+                  ...styles.previewModeButton,
+                  ...(previewMode === "desktop" ? styles.previewModeActive : {}),
+                }}
+                onClick={() => setPreviewMode("desktop")}
+              >
+                Desktop
+              </button>
+              <button
+                type="button"
+                style={{
+                  ...styles.previewModeButton,
+                  ...(previewMode === "mobile" ? styles.previewModeActive : {}),
+                }}
+                onClick={() => setPreviewMode("mobile")}
+              >
+                Mobile
+              </button>
+            </div>
+            <a href={previewUrl} target="_blank" rel="noreferrer" style={styles.previewOpenTab}>
+              Open tab
+            </a>
+          </div>
+          <div
+            style={{
+              ...styles.previewFrameWrap,
+              ...(previewMode === "mobile" ? styles.previewFrameMobile : {}),
+            }}
+          >
+            <iframe
+              title="Site preview"
+              src={previewUrl}
+              style={styles.previewIframe}
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            />
+          </div>
+        </aside>
+      )}
     </div>
   );
 }
@@ -313,21 +465,75 @@ function lineStyle(line: ChatLine): CSSProperties {
 }
 
 const styles: Record<string, CSSProperties> = {
+  page: {
+    display: "flex",
+    flexDirection: "row",
+    minHeight: "100dvh",
+    width: "100%",
+  },
   shell: {
     display: "flex",
     flexDirection: "column",
-    minHeight: "100dvh",
+    flex: "1 1 420px",
+    minWidth: 0,
     maxWidth: 640,
     margin: "0 auto",
+  },
+  chatColumn: {
+    display: "flex",
+    flexDirection: "column",
+    flex: 1,
+    minHeight: 0,
   },
   header: {
     padding: "20px 16px 8px",
     borderBottom: "1px solid var(--border)",
   },
+  headerRow: {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  accountBar: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-end",
+    gap: 6,
+    maxWidth: "100%",
+  },
+  accountEmail: {
+    fontSize: 12,
+    color: "var(--muted)",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    maxWidth: 220,
+  },
+  signOutButton: {
+    padding: "6px 10px",
+    borderRadius: 8,
+    border: "1px solid var(--border)",
+    background: "transparent",
+    color: "var(--muted)",
+    fontSize: 13,
+    cursor: "pointer",
+  },
   title: { margin: 0, fontSize: 22, fontWeight: 700 },
   subtitle: { margin: "6px 0 0", color: "var(--muted)", fontSize: 14 },
   provisioning: { margin: "8px 0 0", color: "var(--accent)", fontSize: 13 },
   provisioningError: { margin: "8px 0 0", color: "#ffb4b4", fontSize: 13 },
+  retryProvisionButton: {
+    marginTop: 10,
+    padding: "8px 12px",
+    borderRadius: 8,
+    border: "1px solid var(--border)",
+    background: "var(--surface)",
+    color: "var(--text)",
+    fontSize: 13,
+    cursor: "pointer",
+  },
   previewBar: {
     display: "flex",
     flexDirection: "column",
@@ -375,4 +581,56 @@ const styles: Record<string, CSSProperties> = {
     cursor: "pointer",
   },
   inlineLink: { color: "inherit", fontWeight: 700 },
+  previewPanel: {
+    display: "flex",
+    flex: "1 1 50%",
+    flexDirection: "column",
+    borderLeft: "1px solid var(--border)",
+    background: "var(--surface)",
+    minWidth: 0,
+  },
+  previewPanelHeader: {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 8,
+    padding: "10px 12px",
+    borderBottom: "1px solid var(--border)",
+  },
+  previewModeToggle: { display: "flex", gap: 4, marginLeft: "auto" },
+  previewModeButton: {
+    padding: "4px 8px",
+    fontSize: 12,
+    borderRadius: 6,
+    border: "1px solid var(--border)",
+    background: "transparent",
+    color: "var(--muted)",
+    cursor: "pointer",
+  },
+  previewModeActive: {
+    background: "var(--accent-dim)",
+    color: "#fff",
+    borderColor: "var(--accent-dim)",
+  },
+  previewOpenTab: { fontSize: 12, color: "var(--accent)" },
+  previewFrameWrap: {
+    flex: 1,
+    minHeight: 0,
+    padding: 12,
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "stretch",
+  },
+  previewFrameMobile: {
+    maxWidth: 390,
+    margin: "0 auto",
+    width: "100%",
+  },
+  previewIframe: {
+    flex: 1,
+    width: "100%",
+    border: "1px solid var(--border)",
+    borderRadius: 8,
+    background: "#fff",
+  },
 };

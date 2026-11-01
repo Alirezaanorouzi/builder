@@ -1,6 +1,6 @@
 import { getCodingEngineId } from "@/lib/config";
 import { prisma } from "@/lib/db";
-import { enqueueSiteProvisioning } from "@/lib/provisioning/runner";
+import { enqueueSiteProvisioning } from "@/services/provisioning.service";
 import {
   siteHasDedicatedResources,
   type SiteWithResources,
@@ -24,7 +24,27 @@ export function serializeSiteForClient(site: SiteWithResources) {
 
 /** Start or resume GitHub + Vercel provisioning when the site has no dedicated resources yet. */
 export async function syncSiteProvisioning(site: SiteWithResources): Promise<void> {
-  if (siteHasDedicatedResources(site)) return;
+  const hasDedicated = siteHasDedicatedResources(site);
+
+  // Race: provisioning marked failed after GitHub + Vercel were saved — unblock the user.
+  if (site.status === "failed" && hasDedicated) {
+    await prisma.site.update({
+      where: { id: site.id },
+      data: { status: "active", updatedAt: new Date() },
+    });
+    await prisma.siteResources.update({
+      where: { siteId: site.id },
+      data: {
+        provisioningStep: "complete",
+        provisioningError: null,
+      },
+    });
+    return;
+  }
+
+  if (hasDedicated && site.status === "active") {
+    return;
+  }
 
   let status = site.status;
   if (status === "active" && !site.resources?.githubRepoFullName) {
@@ -121,6 +141,21 @@ export async function getOrCreateChatSession(siteId: string, chatSessionId?: str
   const engine = getCodingEngineId() as CodingEngine;
   return prisma.chatSession.create({
     data: { siteId, engine },
+  });
+}
+
+export async function setSiteCursorAgentId(
+  siteId: string,
+  cursorAgentId: string,
+  cursorAgentStatus?: string
+) {
+  return prisma.siteResources.update({
+    where: { siteId },
+    data: {
+      cursorAgentId,
+      cursorAgentStatus: cursorAgentStatus ?? "active",
+      updatedAt: new Date(),
+    },
   });
 }
 

@@ -10,43 +10,17 @@ export function siteHasDedicatedResources(site: SiteWithResources): boolean {
   );
 }
 
-export function workspaceDirectoryForBuild(siteId: string, buildRunId: string): string {
-  return `/workspaces/${siteId}/${buildRunId}`;
-}
-
-/** Per-site / per-build tenant for engines. Active sites require dedicated SiteResources. */
-export function resolveTenantContext(
-  site: SiteWithResources,
-  buildRunId?: string
-): TenantContext {
+/** Cursor Cloud Agents operate on GitHub; tenant context maps site resources for the engine. */
+export function resolveTenantContext(site: SiteWithResources): TenantContext {
   const cfg = getConfig();
   const r = site.resources;
 
-  if (r?.githubRepoFullName && r.vercelProjectId) {
-    const workspaceDirectory = buildRunId
-      ? workspaceDirectoryForBuild(site.id, buildRunId)
-      : `/workspaces/${site.id}`;
-    return {
-      siteId: site.id,
-      repoUrl: `https://github.com/${r.githubRepoFullName}`,
-      repoRef: r.githubDefaultBranch || cfg.templateRepoRef,
-      repoFullName: r.githubRepoFullName,
-      vercelProjectId: r.vercelProjectId,
-      vercelTeamId: r.vercelTeamId ?? cfg.vercelTeamId,
-      productionUrl: r.productionUrl ?? undefined,
-      workspaceDirectory,
-      dedicated: true,
-    };
-  }
-
-  if (site.status === "active") {
-    throw new SiteNotReadyError(
-      "Site is active but missing GitHub/Vercel resources. Retry provisioning."
-    );
-  }
-
-  const allowLegacy = process.env.ALLOW_SHARED_MVP_FALLBACK === "1";
-  if (!allowLegacy) {
+  if (!r?.githubRepoFullName || !r.vercelProjectId) {
+    if (site.status === "active") {
+      throw new SiteNotReadyError(
+        "Site is active but missing GitHub/Vercel resources. Retry provisioning."
+      );
+    }
     throw new SiteNotReadyError(
       "Site is not provisioned with dedicated GitHub/Vercel resources."
     );
@@ -54,16 +28,13 @@ export function resolveTenantContext(
 
   return {
     siteId: site.id,
-    repoUrl: cfg.templateRepoUrl,
-    repoRef: cfg.templateRepoRef,
-    repoFullName: cfg.templateRepoUrl.replace(/^https:\/\/github.com\//, "").replace(/\.git$/, ""),
-    vercelProjectId: cfg.vercelProjectId,
-    vercelTeamId: cfg.vercelTeamId,
-    productionUrl: cfg.vercelProductionUrl,
-    workspaceDirectory: buildRunId
-      ? workspaceDirectoryForBuild(site.id, buildRunId)
-      : "/workspace",
-    dedicated: false,
+    repoUrl: `https://github.com/${r.githubRepoFullName}`,
+    repoRef: r.githubDefaultBranch || cfg.templateRepoRef,
+    repoFullName: r.githubRepoFullName,
+    vercelProjectId: r.vercelProjectId,
+    vercelTeamId: r.vercelTeamId ?? cfg.vercelTeamId,
+    productionUrl: r.productionUrl ?? undefined,
+    dedicated: true,
   };
 }
 

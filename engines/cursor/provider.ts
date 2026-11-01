@@ -13,7 +13,7 @@ import {
   cursorStreamUrl,
   friendlyToolActivity,
   sendFollowUpRun,
-} from "./client";
+} from "@/services/cursor.service";
 
 async function consumeCursorSse(
   agentId: string,
@@ -131,6 +131,6 @@ export const cursorEngineProvider: CodingEngineProvider = {
 export function assertCursorConfig() {
   const c = getConfig();
   if (!c.cursorApiKey) {
-    throw new Error("Missing CURSOR_API_KEY (CODING_ENGINE=cursor)");
+    throw new Error("Missing CURSOR_API_KEY");
   }
 }

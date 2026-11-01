@@ -1,9 +1,8 @@
 /**
- * Shared contract for coding backends (Cursor Cloud Agents, OpenCode, …).
- * agentId + runId map to each engine’s session/run identifiers.
+ * Shared contract for the Cursor Cloud Agents coding backend.
  */
 
-export type CodingEngineId = "cursor" | "opencode";
+export type CodingEngineId = "cursor";
 
 export interface TenantContext {
   siteId: string;
@@ -13,9 +12,7 @@ export interface TenantContext {
   vercelProjectId: string;
   vercelTeamId?: string;
   productionUrl?: string;
-  /** OpenCode project root (absolute path inside worker container). */
-  workspaceDirectory: string;
-  /** True when repo/Vercel come from SiteResources, not global env. */
+  /** True when repo/Vercel come from SiteResources. */
   dedicated: boolean;
 }
 
@@ -41,6 +38,9 @@ export interface CodingEngineProvider {
     onEvent: (event: EngineStreamEvent) => void
   ): Promise<EngineStreamResult>;
 }
+
+/** Alias used in architecture docs. */
+export type CodingAgentProvider = CodingEngineProvider;
 
 export type EngineStreamEvent =
   | { type: "status"; message: string }

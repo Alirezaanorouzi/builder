@@ -1,11 +1,58 @@
 import { assertCursorConfig } from "@engines/cursor/provider";
-import { assertOpencodeConfig } from "@engines/opencode/provider";
 
-export type CodingEngineId = "cursor" | "opencode";
+export type CodingEngineId = "cursor";
 
 export function getCodingEngineId(): CodingEngineId {
-  const raw = process.env.CODING_ENGINE?.trim().toLowerCase();
-  return raw === "opencode" ? "opencode" : "cursor";
+  return "cursor";
+}
+
+/** Platform secrets and defaults for provisioning (not per-customer). */
+export function parseGitHubRepo(url: string): { owner: string; repo: string } | null {
+  const m = url.match(/github\.com[/:]([^/]+)\/([^/.]+)/i);
+  if (!m) return null;
+  return { owner: m[1], repo: m[2].replace(/\.git$/, "") };
+}
+
+export function getPlatformConfig() {
+  const templateRepoUrl = process.env.TEMPLATE_REPO_URL?.trim() ?? "";
+  const parsed = parseGitHubRepo(templateRepoUrl);
+  const githubToken =
+    process.env.PLATFORM_GITHUB_TOKEN?.trim() ||
+    process.env.GITHUB_TOKEN?.trim() ||
+    "";
+  const githubRepoOwner =
+    process.env.GITHUB_REPO_OWNER?.trim() || parsed?.owner || "";
+  const templateOwner = process.env.GITHUB_TEMPLATE_OWNER?.trim() || parsed?.owner || "";
+  const templateRepo = process.env.GITHUB_TEMPLATE_REPO?.trim() || parsed?.repo || "";
+  const vercelToken = process.env.VERCEL_TOKEN?.trim() ?? "";
+  const vercelTeamId = process.env.VERCEL_TEAM_ID?.trim();
+  const defaultBranch = process.env.TEMPLATE_REPO_REF?.trim() || "main";
+
+  return {
+    templateRepoUrl,
+    templateOwner,
+    templateRepo,
+    githubToken,
+    githubRepoOwner,
+    vercelToken,
+    vercelTeamId,
+    defaultBranch,
+  };
+}
+
+export function assertPlatformProvisioningConfig() {
+  const p = getPlatformConfig();
+  const missing: string[] = [];
+  if (!p.githubToken) missing.push("PLATFORM_GITHUB_TOKEN or GITHUB_TOKEN");
+  if (!p.templateOwner || !p.templateRepo) {
+    missing.push("TEMPLATE_REPO_URL (or GITHUB_TEMPLATE_OWNER + GITHUB_TEMPLATE_REPO)");
+  }
+  if (!p.githubRepoOwner) missing.push("GITHUB_REPO_OWNER");
+  if (!p.vercelToken) missing.push("VERCEL_TOKEN");
+  if (missing.length) {
+    throw new Error(`Provisioning config: ${missing.join(", ")}`);
+  }
+  return p;
 }
 
 export function getConfig() {
@@ -18,12 +65,6 @@ export function getConfig() {
   const vercelTeamId = process.env.VERCEL_TEAM_ID?.trim();
   const vercelProductionUrl = process.env.VERCEL_PRODUCTION_URL?.trim();
   const cursorModelId = process.env.CURSOR_MODEL_ID?.trim();
-  const opencodeServerUrl = process.env.OPENCODE_SERVER_URL?.trim() || "http://127.0.0.1:4096";
-  const opencodeServerUsername = process.env.OPENCODE_SERVER_USERNAME?.trim() || "opencode";
-  const opencodeServerPassword = process.env.OPENCODE_SERVER_PASSWORD?.trim() ?? "";
-  const opencodeMaxWaitMs = Number(process.env.OPENCODE_MAX_WAIT_MS ?? 900000);
-  const opencodeModel =
-    process.env.OPENCODE_MODEL?.trim() || "openrouter/openrouter/free";
 
   return {
     codingEngine: getCodingEngineId(),
@@ -36,38 +77,19 @@ export function getConfig() {
     vercelProductionUrl,
     cursorModelId,
     cursorApiBase: "https://api.cursor.com",
-    opencodeServerUrl,
-    opencodeServerUsername,
-    opencodeServerPassword,
-    opencodeMaxWaitMs,
-    opencodeModel,
   };
 }
 
 export function assertServerConfig() {
   const c = getConfig();
   const missing: string[] = [];
-  const allowLegacy = process.env.ALLOW_SHARED_MVP_FALLBACK === "1";
-
-  if (allowLegacy) {
-    if (!c.templateRepoUrl) missing.push("TEMPLATE_REPO_URL");
-    if (!c.vercelProjectId) missing.push("VERCEL_PROJECT_ID");
-  }
 
   if (!c.vercelToken) missing.push("VERCEL_TOKEN");
 
-  if (c.codingEngine === "cursor") {
-    try {
-      assertCursorConfig();
-    } catch (e) {
-      missing.push(e instanceof Error ? e.message : "CURSOR_API_KEY");
-    }
-  } else {
-    try {
-      assertOpencodeConfig();
-    } catch (e) {
-      missing.push(e instanceof Error ? e.message : "OPENCODE_SERVER_URL");
-    }
+  try {
+    assertCursorConfig();
+  } catch (e) {
+    missing.push(e instanceof Error ? e.message : "CURSOR_API_KEY");
   }
 
   if (missing.length) {
