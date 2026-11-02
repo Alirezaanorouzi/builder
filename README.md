@@ -49,10 +49,10 @@ Agent options used:
 
 1. User sends a message → `POST /api/chat/send` creates a **BuildRun** (`queued`) for the site (one active build per site).
 2. **Worker** (`npm run worker` or `INLINE_BUILD_WORKER=1`) claims the job, runs the coding engine, pushes git, waits for Vercel, writes **BuildEvent** rows.
-3. Client opens `GET /api/chat/stream?buildRunId=` → replays/tails events from SQLite (refresh-safe).
+3. Client opens `GET /api/chat/stream?buildRunId=` → replays/tails events from Postgres (refresh-safe).
 4. **SiteResources** stores `cursorAgentId` (and chat session mirrors it) for follow-up runs on the same site.
 
-Auth + sites use **SQLite** locally (`DATABASE_URL=file:./dev.db` next to `prisma/schema.prisma`). Optional Postgres for production — see [docs/DATABASE.md](docs/DATABASE.md).
+Auth + sites use **PostgreSQL** (`DATABASE_URL`). See [docs/DATABASE.md](docs/DATABASE.md) (Liara, Docker, or Neon).
 
 ## Project layout
 

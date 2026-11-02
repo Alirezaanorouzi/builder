@@ -1,6 +1,6 @@
 import { getCodingEngineId } from "@/lib/config";
 import { prisma } from "@/lib/db";
-import { enqueueSiteProvisioning } from "@/services/provisioning.service";
+import { transitionSiteStatus } from "@/services/site-status.service";
 import {
   siteHasDedicatedResources,
   type SiteWithResources,
@@ -15,8 +15,12 @@ export function serializeSiteForClient(site: SiteWithResources) {
     slug: site.slug,
     displayName: site.displayName,
     status: site.status,
+    statusChangedAt: site.statusChangedAt.toISOString(),
+    activatedAt: site.activatedAt?.toISOString() ?? null,
+    suspendReason: site.suspendReason ?? null,
     provisioningStep: site.resources?.provisioningStep ?? null,
     provisioningError: site.resources?.provisioningError ?? null,
+    provisioningAttempts: site.resources?.provisioningAttempts ?? 0,
     productionUrl: site.resources?.productionUrl ?? null,
     githubRepoFullName: site.resources?.githubRepoFullName ?? null,
   };
@@ -28,9 +32,9 @@ export async function syncSiteProvisioning(site: SiteWithResources): Promise<voi
 
   // Race: provisioning marked failed after GitHub + Vercel were saved — unblock the user.
   if (site.status === "failed" && hasDedicated) {
-    await prisma.site.update({
-      where: { id: site.id },
-      data: { status: "active", updatedAt: new Date() },
+    await transitionSiteStatus(site.id, "active", {
+      message: "Recovered: resources present after failed provisioning",
+      setActivatedAt: true,
     });
     await prisma.siteResources.update({
       where: { siteId: site.id },
@@ -48,15 +52,14 @@ export async function syncSiteProvisioning(site: SiteWithResources): Promise<voi
 
   let status = site.status;
   if (status === "active" && !site.resources?.githubRepoFullName) {
-    await prisma.site.update({
-      where: { id: site.id },
-      data: { status: "provisioning", updatedAt: new Date() },
+    await transitionSiteStatus(site.id, "provisioning", {
+      message: "Missing resources; re-provisioning",
     });
     status = "provisioning";
   }
 
   if (status === "provisioning" || status === "failed") {
-    enqueueSiteProvisioning(site.id);
+    /* worker claims via DB lease */
   }
 }
 
@@ -85,7 +88,7 @@ export async function ensureDefaultSite(userId: string) {
     },
     include: { resources: true },
   });
-  enqueueSiteProvisioning(created.id);
+  await transitionSiteStatus(created.id, "provisioning", { message: "Default site created" });
   return created;
 }
 
@@ -118,7 +121,7 @@ export async function createUserSite(userId: string, displayName: string, slug?:
     },
     include: { resources: true },
   });
-  enqueueSiteProvisioning(site.id);
+  await transitionSiteStatus(site.id, "provisioning", { message: "Site created" });
   return site;
 }
 

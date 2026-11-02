@@ -45,4 +45,4 @@ Expect `is_template: true` and `POST generate (probe) → 201`.
 
 ## Env
 
-See [.env.example](../.env.example) for `PLATFORM_GITHUB_TOKEN`, `GITHUB_REPO_OWNER`, and `DATABASE_URL` (SQLite file for local MVP).
+See [.env.example](../.env.example) for `PLATFORM_GITHUB_TOKEN`, `GITHUB_REPO_OWNER`, and `DATABASE_URL` (PostgreSQL).

@@ -55,6 +55,17 @@ export function assertPlatformProvisioningConfig() {
   return p;
 }
 
+export function getAdminEmails(): Set<string> {
+  const raw = process.env.ADMIN_EMAILS?.trim() ?? "";
+  if (!raw) return new Set();
+  return new Set(
+    raw
+      .split(",")
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean)
+  );
+}
+
 export function getConfig() {
   const cursorApiKey = process.env.CURSOR_API_KEY?.trim() ?? "";
   const templateRepoUrl = process.env.TEMPLATE_REPO_URL?.trim() ?? "";

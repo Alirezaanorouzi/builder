@@ -1,10 +1,9 @@
 import { prisma } from "@/lib/db";
 import { getPlatformConfig } from "@/lib/config";
 import type { ProvisioningStep } from "@prisma/client";
+import { transitionSiteStatus } from "@/services/site-status.service";
 import { createRepoFromTemplate } from "./github.service";
 import { createVercelProjectForRepo } from "./vercel.service";
-
-const provisioningInFlight = new Set<string>();
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -27,27 +26,63 @@ async function setStep(
   });
 }
 
+async function releaseProvisioningLease(siteId: string) {
+  await prisma.siteResources.update({
+    where: { siteId },
+    data: {
+      provisioningLeaseUntil: null,
+      provisioningWorkerId: null,
+      updatedAt: new Date(),
+    },
+  });
+}
+
+/** Postgres: claim next site needing provisioning (multi-worker safe). */
+export async function claimNextProvisioningSite(
+  workerId: string,
+  leaseMinutes: number
+): Promise<string | null> {
+  const rows = await prisma.$queryRaw<{ siteId: string }[]>`
+    UPDATE "SiteResources"
+    SET
+      "provisioningLeaseUntil" = NOW() + make_interval(mins => ${leaseMinutes}),
+      "provisioningWorkerId" = ${workerId},
+      "provisioningAttempts" = "provisioningAttempts" + 1,
+      "updatedAt" = NOW()
+    WHERE "siteId" = (
+      SELECT r."siteId"
+      FROM "SiteResources" r
+      INNER JOIN "Site" s ON s.id = r."siteId"
+      WHERE s.status = 'provisioning'::"SiteStatus"
+        AND r."provisioningStep" <> 'complete'::"ProvisioningStep"
+        AND (
+          r."provisioningLeaseUntil" IS NULL
+          OR r."provisioningLeaseUntil" < NOW()
+        )
+      ORDER BY s."createdAt" ASC
+      FOR UPDATE OF r SKIP LOCKED
+      LIMIT 1
+    )
+    RETURNING "siteId"
+  `;
+  return rows[0]?.siteId ?? null;
+}
+
 /**
- * Idempotent-ish step runner: resumes from SiteResources.provisioningStep.
+ * Idempotent step runner: resumes from SiteResources.provisioningStep.
+ * Caller must hold the DB lease (see claimNextProvisioningSite).
  */
 export async function runSiteProvisioning(siteId: string): Promise<void> {
-  if (provisioningInFlight.has(siteId)) {
-    return;
-  }
-  provisioningInFlight.add(siteId);
-
   const site = await prisma.site.findUnique({
     where: { id: siteId },
     include: { resources: true },
   });
   if (!site?.resources) {
-    provisioningInFlight.delete(siteId);
     throw new Error("Site resources missing");
   }
 
-  await prisma.site.update({
-    where: { id: siteId },
-    data: { status: "provisioning", updatedAt: new Date() },
+  await transitionSiteStatus(siteId, "provisioning", {
+    message: "Provisioning started or resumed",
   });
 
   await prisma.siteResources.update({
@@ -122,9 +157,9 @@ export async function runSiteProvisioning(siteId: string): Promise<void> {
         /* initial deploy may still be building — site can still become active */
       }
       await setStep(siteId, "complete");
-      await prisma.site.update({
-        where: { id: siteId },
-        data: { status: "active", updatedAt: new Date() },
+      await transitionSiteStatus(siteId, "active", {
+        message: "GitHub + Vercel provisioning complete",
+        setActivatedAt: true,
       });
     }
   } catch (e) {
@@ -133,31 +168,24 @@ export async function runSiteProvisioning(siteId: string): Promise<void> {
       where: { siteId },
       data: { provisioningError: message },
     });
-    await prisma.site.update({
-      where: { id: siteId },
-      data: { status: "failed", updatedAt: new Date() },
-    });
+    await transitionSiteStatus(siteId, "failed", { message });
     throw e;
   } finally {
-    provisioningInFlight.delete(siteId);
+    await releaseProvisioningLease(siteId);
   }
 }
 
-/** Fire-and-forget wrapper — unified worker picks up `provisioning` sites. */
+/** Worker picks up sites in `provisioning` status. */
 export function enqueueSiteProvisioning(_siteId: string) {
-  /* no-op: run `npm run worker` or INLINE_BUILD_WORKER=1 */
+  /* no-op: run worker with WORKER_MODE=all|provisioning */
 }
 
-/** Claim the next site that still needs GitHub/Vercel setup (single worker). */
-export async function processOneProvisioningJob(): Promise<boolean> {
-  const site = await prisma.site.findFirst({
-    where: {
-      status: "provisioning",
-      resources: { provisioningStep: { not: "complete" } },
-    },
-    orderBy: { createdAt: "asc" },
-  });
-  if (!site) return false;
-  await runSiteProvisioning(site.id);
+export async function processOneProvisioningJob(
+  workerId: string,
+  leaseMinutes: number
+): Promise<boolean> {
+  const siteId = await claimNextProvisioningSite(workerId, leaseMinutes);
+  if (!siteId) return false;
+  await runSiteProvisioning(siteId);
   return true;
 }

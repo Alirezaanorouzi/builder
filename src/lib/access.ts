@@ -1,26 +1,23 @@
 import { headers } from "next/headers";
 import { auth, type SessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { HttpError } from "@/lib/http-error";
+import { assertUserCanUsePlatform } from "@/services/user.service";
 
-export class HttpError extends Error {
-  constructor(
-    message: string,
-    readonly status: number
-  ) {
-    super(message);
-  }
-}
+export { HttpError };
 
 export async function requireSessionUser(): Promise<SessionUser> {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session?.user?.id || !session.user.email) {
     throw new HttpError("Unauthorized", 401);
   }
-  return {
+  const base = {
     id: session.user.id,
     email: session.user.email,
     name: session.user.name ?? session.user.email,
   };
+  await assertUserCanUsePlatform(base.id);
+  return base;
 }
 
 export async function assertSiteAccess(userId: string, siteId: string) {

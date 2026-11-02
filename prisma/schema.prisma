@@ -1,14 +1,22 @@
-// Control plane + Better Auth
-// Local MVP: SQLite file (DATABASE_URL=file:./prisma/dev.db)
-// Production scale: switch provider to postgresql + migrate deploy
+// Control plane + Better Auth — PostgreSQL (Liara, Neon, Docker, etc.)
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  user
+  admin
+}
+
+enum UserAccountStatus {
+  active
+  suspended
 }
 
 enum SiteStatus {
@@ -43,16 +51,22 @@ enum BuildRunStatus {
 }
 
 model User {
-  id            String    @id
-  name          String
-  email         String    @unique
-  emailVerified Boolean   @default(false)
-  image         String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  sessions      Session[]
-  accounts      Account[]
-  sites         Site[]
+  id               String            @id
+  name             String
+  email            String            @unique
+  emailVerified    Boolean           @default(false)
+  image            String?
+  role             UserRole          @default(user)
+  accountStatus    UserAccountStatus @default(active)
+  suspendedReason  String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  sessions         Session[]
+  accounts         Account[]
+  sites            Site[]
+
+  @@index([accountStatus])
+  @@index([role])
 }
 
 model Session {
@@ -100,39 +114,62 @@ model Verification {
 }
 
 model Site {
-  id          String     @id @default(cuid())
-  userId      String
-  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  slug        String
-  displayName String
-  status      SiteStatus @default(provisioning)
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  id              String     @id @default(cuid())
+  userId          String
+  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  slug            String
+  displayName     String
+  status          SiteStatus @default(provisioning)
+  statusChangedAt DateTime   @default(now())
+  activatedAt     DateTime?
+  suspendReason   String?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
 
   resources    SiteResources?
   chatSessions ChatSession[]
   buildRuns    BuildRun[]
+  statusEvents SiteStatusEvent[]
 
   @@unique([userId, slug])
   @@index([userId])
+  @@index([status, statusChangedAt])
 }
 
 model SiteResources {
-  id                  String           @id @default(cuid())
-  siteId              String           @unique
-  site                Site             @relation(fields: [siteId], references: [id], onDelete: Cascade)
-  provisioningStep    ProvisioningStep @default(pending_github_repo)
-  provisioningError   String?
-  githubRepoId        String?
-  githubRepoFullName  String?
-  githubDefaultBranch String           @default("main")
-  vercelProjectId     String?
-  vercelTeamId        String?
-  productionUrl       String?
-  cursorAgentId       String?
-  cursorAgentStatus   String?
-  createdAt           DateTime         @default(now())
-  updatedAt           DateTime         @updatedAt
+  id                     String           @id @default(cuid())
+  siteId                 String           @unique
+  site                   Site             @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  provisioningStep       ProvisioningStep @default(pending_github_repo)
+  provisioningError      String?
+  provisioningAttempts   Int              @default(0)
+  provisioningLeaseUntil DateTime?
+  provisioningWorkerId   String?
+  githubRepoId           String?
+  githubRepoFullName     String?
+  githubDefaultBranch    String           @default("main")
+  vercelProjectId        String?
+  vercelTeamId           String?
+  productionUrl          String?
+  cursorAgentId          String?
+  cursorAgentStatus      String?
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
+
+  @@index([provisioningStep])
+  @@index([provisioningLeaseUntil])
+}
+
+model SiteStatusEvent {
+  id         String      @id @default(cuid())
+  siteId     String
+  site       Site        @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  fromStatus SiteStatus?
+  toStatus   SiteStatus
+  message    String?
+  createdAt  DateTime    @default(now())
+
+  @@index([siteId, createdAt])
 }
 
 model ChatSession {

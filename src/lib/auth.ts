@@ -19,7 +19,7 @@ const devTrustedOrigins =
 export const auth = betterAuth({
   baseURL: authBaseUrl,
   trustedOrigins: [authBaseUrl, ...devTrustedOrigins],
-  database: prismaAdapter(prisma, { provider: "sqlite" }),
+  database: prismaAdapter(prisma, { provider: "postgresql" }),
   emailAndPassword: {
     enabled: true,
   },

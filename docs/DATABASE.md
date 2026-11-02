@@ -1,46 +1,62 @@
-# Database: SQLite (MVP) vs Postgres (production scale)
+# Database: PostgreSQL
 
-**Default for local MVP:** a SQLite file — no Docker Postgres required.
+The app uses **PostgreSQL** (Liara, Neon, Docker, etc.). SQLite is no longer supported in this branch.
 
-## Local development
+## Connection string
 
-In `.env.local`:
+In `.env.local` (and Liara env vars):
 
 ```env
-DATABASE_URL="file:./dev.db"
+DATABASE_URL="postgresql://USER:PASSWORD@HOST:PORT/DATABASE?sslmode=require"
 BETTER_AUTH_SECRET=<openssl rand -base64 32>
-BETTER_AUTH_URL=http://localhost:3000
+BETTER_AUTH_URL=https://your-app-domain
 ```
 
-Apply schema:
+**Liara:** copy the Postgres connection URL from the Liara dashboard. If connections fail, try appending `?sslmode=require` (or the SSL mode Liara documents).
+
+**Do not commit** real passwords. Use Liara’s env UI for production.
+
+## Apply schema
+
+First time (empty database):
 
 ```bash
 npm run db:migrate
 ```
 
-Or for a quick throwaway DB:
+On Liara deploy (CI or release command):
 
 ```bash
-npm run db:push
+npx prisma migrate deploy
 ```
 
-The SQLite file lives next to `prisma/schema.prisma` (typically `prisma/dev.db`) and is gitignored. Use **one worker process** (`npm run worker`) when processing builds — SQLite does not support `FOR UPDATE SKIP LOCKED`.
+Regenerate client after pull:
 
-## Optional: local Postgres (Docker)
+```bash
+npx prisma generate
+```
 
-If you prefer Postgres locally:
+## Local Postgres without Liara
 
 ```bash
 docker compose -f docker-compose.db.yml up -d
 ```
 
-Set `DATABASE_URL=postgresql://builder:builder@127.0.0.1:5434/builder`, change `provider` in `prisma/schema.prisma` to `postgresql`, and use a Postgres migration baseline.
+```env
+DATABASE_URL=postgresql://builder:builder@127.0.0.1:5434/builder
+```
 
-## Production (Neon or other Postgres)
+## Worker / queue
 
-1. Create a Postgres database (e.g. [neon.tech](https://neon.tech)).
-2. Set `DATABASE_URL` to the pooled connection string.
-3. Switch `datasource db` in `prisma/schema.prisma` to `provider = "postgresql"`.
-4. Run `npx prisma migrate deploy` in CI or release.
+- **Builds:** `FOR UPDATE SKIP LOCKED` on `BuildRun`.
+- **Provisioning:** DB lease on `SiteResources` (`provisioningLeaseUntil`, `provisioningWorkerId`) — safe with multiple workers.
 
-Same Prisma models work for SQLite and Postgres — only the provider, URL, and worker scaling model change.
+Env: `WORKER_MODE` (`all` | `builds` | `provisioning`), `WORKER_ID`, `WORKER_POLL_MS`, `PROVISIONING_LEASE_MINUTES`.
+
+## Admin users
+
+`ADMIN_EMAILS=comma,separated,emails` — promoted to `admin` on login. APIs: `GET/PATCH /api/admin/users`, `GET /api/admin/sites?status=provisioning`.
+
+## Optional local SQLite (historical)
+
+Older commits used `file:./dev.db`. After switching to Postgres, create a **fresh** Liara or Docker database — do not point Postgres at an old SQLite file.

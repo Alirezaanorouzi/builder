@@ -1,8 +1,8 @@
 import { assertSiteAccess, jsonError, requireSessionUser } from "@/lib/access";
 import { prisma } from "@/lib/db";
-import { enqueueSiteProvisioning } from "@/services/provisioning.service";
 import { processOneWorkerTick } from "@/lib/build-worker";
 import { serializeSiteForClient } from "@/lib/sites";
+import { transitionSiteStatus } from "@/services/site-status.service";
 
 export const runtime = "nodejs";
 
@@ -14,16 +14,16 @@ export async function POST(_req: Request, { params }: Params) {
     const { id } = await params;
     await assertSiteAccess(user.id, id);
 
-    await prisma.site.update({
-      where: { id },
-      data: { status: "provisioning", updatedAt: new Date() },
-    });
+    await transitionSiteStatus(id, "provisioning", { message: "Manual provisioning retry" });
     await prisma.siteResources.update({
       where: { siteId: id },
-      data: { provisioningError: null },
+      data: {
+        provisioningError: null,
+        provisioningLeaseUntil: null,
+        provisioningWorkerId: null,
+      },
     });
 
-    enqueueSiteProvisioning(id);
     if (process.env.INLINE_BUILD_WORKER === "1") {
       void processOneWorkerTick();
     }

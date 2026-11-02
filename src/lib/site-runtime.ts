@@ -49,6 +49,11 @@ export function assertSiteReadyForBuild(site: SiteWithResources) {
           "Site provisioning failed. Retry from Sites or POST /api/sites/:id/provision."
       );
     }
+    if (site.status === "suspended") {
+      throw new SiteNotReadyError(
+        site.suspendReason ?? "This site is suspended."
+      );
+    }
     throw new SiteNotReadyError(`Site is not active (status: ${site.status}).`);
   }
 }

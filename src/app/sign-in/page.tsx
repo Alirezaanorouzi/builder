@@ -94,7 +94,7 @@ export default function SignInPage() {
     <div style={{ maxWidth: 400, margin: "48px auto", padding: 16 }}>
       <h1 style={{ fontSize: 22 }}>{mode === "sign-in" ? "Sign in" : "Create account"}</h1>
       <p style={{ color: "var(--muted)", fontSize: 14 }}>
-        Required for multi-tenant builds. Local dev uses SQLite (`DATABASE_URL=file:./dev.db`); production can use Postgres/Neon.
+        Required for multi-tenant builds. Set `DATABASE_URL` to your Postgres connection string (e.g. Liara).
       </p>
       <form onSubmit={(e) => void onSubmit(e)} style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 24 }}>
         {mode === "sign-up" && (
