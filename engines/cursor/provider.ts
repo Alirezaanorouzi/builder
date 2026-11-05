@@ -1,4 +1,4 @@
-import { Agent, CursorAgentError } from "@cursor/sdk";
+import { Agent, CursorAgentError, type SDKUserMessage } from "@cursor/sdk";
 import { getConfig, getCursorModelSelection } from "@/lib/config";
 import { streamCloudAgentRun } from "@/services/cursor-cloud-stream";
 import type {
@@ -50,7 +50,14 @@ export const cursorEngineProvider: CodingEngineProvider = {
     };
 
     try {
-      const run = await agent.send(input.promptText);
+      const run = await agent.send(
+        input.promptImages?.length
+          ? ({
+              text: input.promptText,
+              images: input.promptImages,
+            } satisfies SDKUserMessage)
+          : input.promptText
+      );
       const agentId = agent.agentId;
       const runId = run.id;
 

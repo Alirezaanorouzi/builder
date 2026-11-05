@@ -2,6 +2,8 @@
  * Shared contract for the Cursor Cloud Agents coding backend.
  */
 
+import type { SDKImage } from "@cursor/sdk";
+
 export type CodingEngineId = "cursor";
 
 export interface TenantContext {
@@ -18,6 +20,7 @@ export interface TenantContext {
 
 export interface StartRunInput {
   promptText: string;
+  promptImages?: SDKImage[];
   agentId: string | null;
   tenant: TenantContext;
 }

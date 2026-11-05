@@ -11,7 +11,9 @@ import {
 import { useRouter } from "next/navigation";
 import { AgentActivity } from "@/components/AgentActivity";
 import { ChatMarkdown } from "@/components/chat/ChatMarkdown";
+import { useChatAttachments, ComposerPaperclipIcon } from "@/components/chat/ChatComposerAttachments";
 import { PreviewWaitingView } from "@/components/preview-waiting";
+import { AccountSetupWaitingView } from "@/components/account-setup-waiting";
 import {
   applyRawActivityEvent,
   finalizeAgentActivity,
@@ -28,7 +30,12 @@ import {
 } from "@/lib/builder-client-storage";
 
 type ChatItem =
-  | { id: string; kind: "user"; text: string }
+  | {
+      id: string;
+      kind: "user";
+      text: string;
+      imagePreviews?: string[];
+    }
   | { id: string; kind: "assistant"; text: string; buildRunId: string }
   | { id: string; kind: "agentActivity"; buildRunId: string; snapshot: AgentActivitySnapshot }
   | { id: string; kind: "preview"; url: string }
@@ -38,8 +45,6 @@ const CHAT_SESSION_KEY = BUILDER_CHAT_SESSION_KEY;
 const SITE_ID_KEY = BUILDER_SITE_ID_KEY;
 const BUILD_RUN_KEY = BUILDER_BUILD_RUN_KEY;
 
-/** Delay before auto-refreshing preview after agent finishes (GitHub → Vercel deploy). */
-const PREVIEW_AUTO_REFRESH_DELAY_MS = 30_000;
 
 const PREVIEW_WAIT_BUILDING = "در حال ساخت سایت…";
 const PREVIEW_WAIT_PUBLISHING = "در حال منتشر کردن برنامه…";
@@ -92,6 +97,7 @@ export function Chat() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [siteId, setSiteId] = useState<string | null>(null);
   const [siteStatus, setSiteStatus] = useState<string | null>(null);
+  const [meReady, setMeReady] = useState(false);
   const [provisioningError, setProvisioningError] = useState<string | null>(null);
   const [chatSessionId, setChatSessionId] = useState<string | null>(null);
   const [input, setInput] = useState("");
@@ -232,32 +238,38 @@ export function Chat() {
   );
 
   const loadMe = useCallback(async () => {
-    const res = await fetch("/api/me");
-    if (!res.ok) return null;
-    const data = (await res.json()) as {
-      user?: { email?: string };
-      sites?: SiteSummary[];
-    };
-    if (data.user?.email) setUserEmail(data.user.email);
-    const sites = data.sites ?? [];
-    const stored = localStorage.getItem(SITE_ID_KEY);
-    const active =
-      sites.find((s) => s.id === stored) ?? sites.find((s) => s.status === "active") ?? sites[0];
-    if (active) {
-      setSiteId(active.id);
-      setSiteStatus(active.status);
-      setProvisioningError(active.provisioningError ?? null);
-      localStorage.setItem(SITE_ID_KEY, active.id);
-      if (active.productionUrl && active.status === "active") {
-        setPreviewUrl(active.productionUrl);
+    try {
+      const res = await fetch("/api/me");
+      if (!res.ok) return null;
+      const data = (await res.json()) as {
+        user?: { email?: string };
+        sites?: SiteSummary[];
+      };
+      if (data.user?.email) setUserEmail(data.user.email);
+      const sites = data.sites ?? [];
+      const stored = localStorage.getItem(SITE_ID_KEY);
+      const active =
+        sites.find((s) => s.id === stored) ?? sites.find((s) => s.status === "active") ?? sites[0];
+      if (active) {
+        setSiteId(active.id);
+        setSiteStatus(active.status);
+        setProvisioningError(active.provisioningError ?? null);
+        localStorage.setItem(SITE_ID_KEY, active.id);
+        if (active.status === "active" && active.productionUrl) {
+          setPreviewUrl(active.productionUrl);
+        } else {
+          setPreviewUrl(null);
+        }
       }
+      return active;
+    } finally {
+      setMeReady(true);
     }
-    return active;
   }, []);
 
   const closeStream = useCallback(() => {
     if (previewRefreshTimerRef.current) {
-      clearTimeout(previewRefreshTimerRef.current);
+      clearInterval(previewRefreshTimerRef.current);
       previewRefreshTimerRef.current = null;
     }
     setPreviewPublishing(false);
@@ -269,6 +281,8 @@ export function Chat() {
   const appendError = useCallback((text: string) => {
     setItems((prev) => [...prev, { id: newId(), kind: "error", text }]);
   }, []);
+
+  const attachments = useChatAttachments(appendError, busy);
 
   const refreshPreview = useCallback(() => {
     setPreviewRefreshKey((k) => k + 1);
@@ -282,12 +296,40 @@ export function Chat() {
     }
     setPublishWaitStartedAt(Date.now());
     setPreviewPublishing(true);
-    previewRefreshTimerRef.current = setTimeout(() => {
-      previewRefreshTimerRef.current = null;
+
+    const pollMs = 8_000;
+    const maxPolls = 24;
+    let polls = 0;
+    const pollForPreviewUrl = () => {
+      polls += 1;
+      void loadMe().then((site) => {
+        if (site?.productionUrl) {
+          setPreviewPublishing(false);
+          refreshPreview();
+          previewRefreshScheduledRef.current = false;
+          if (previewRefreshTimerRef.current) {
+            clearTimeout(previewRefreshTimerRef.current);
+            previewRefreshTimerRef.current = null;
+          }
+        } else if (polls >= maxPolls) {
+          setPreviewPublishing(false);
+          refreshPreview();
+          previewRefreshScheduledRef.current = false;
+        }
+      });
+    };
+
+    pollForPreviewUrl();
+    previewRefreshTimerRef.current = setInterval(pollForPreviewUrl, pollMs);
+    setTimeout(() => {
+      if (previewRefreshTimerRef.current) {
+        clearInterval(previewRefreshTimerRef.current);
+        previewRefreshTimerRef.current = null;
+      }
       setPreviewPublishing(false);
-      refreshPreview();
-    }, PREVIEW_AUTO_REFRESH_DELAY_MS);
-  }, [refreshPreview]);
+      previewRefreshScheduledRef.current = false;
+    }, pollMs * maxPolls + 2_000);
+  }, [loadMe, refreshPreview]);
 
   const applyAgentRunTerminal = useCallback(
     (buildRunId: string, data: SsePayload) => {
@@ -433,7 +475,7 @@ export function Chat() {
     if (siteStatus !== "provisioning" && siteStatus !== "failed") return;
     const timer = window.setInterval(() => {
       void loadMe();
-    }, 4000);
+    }, 6000);
     return () => window.clearInterval(timer);
   }, [siteStatus, loadMe]);
 
@@ -512,11 +554,16 @@ export function Chat() {
 
   const send = async () => {
     const text = input.trim();
-    if (!text || busy) return;
+    if (attachments.isProcessingFiles) {
+      appendError("لطفاً چند لحظه صبر کنید تا تصویر آماده شود.");
+      return;
+    }
+    if (!text && attachments.pending.length === 0) return;
+    if (busy) return;
     if (siteStatus && siteStatus !== "active") {
       appendError(
         siteStatus === "provisioning"
-          ? "سایت در حال راه‌اندازی است (گیت‌هاب و ورسل). کمی صبر کنید…"
+          ? "لطفاً چند لحظه صبر کنید؛ حساب شما در حال آماده‌سازی است."
           : provisioningError ??
               (siteStatus === "failed"
                 ? "راه‌اندازی سایت کامل نشد. از دکمه تلاش مجدد در بالا استفاده کنید یا صفحه را رفرش کنید."
@@ -525,8 +572,20 @@ export function Chat() {
       return;
     }
 
+    const imagePayload = attachments.buildImagePayload();
+    const previews = attachments.pending.map((p) => p.previewUrl);
+
     setInput("");
-    setItems((prev) => [...prev, { id: newId(), kind: "user", text }]);
+    setItems((prev) => [
+      ...prev,
+      {
+        id: newId(),
+        kind: "user",
+        text: text || "پیوست تصویر",
+        imagePreviews: previews.length ? previews : undefined,
+      },
+    ]);
+    attachments.clearImages();
     setBusy(true);
     setBuildWaitStartedAt(Date.now());
 
@@ -539,6 +598,7 @@ export function Chat() {
           message: text,
           siteId,
           chatSessionId,
+          images: imagePayload.length ? imagePayload : undefined,
         }),
       });
       const data = (await res.json()) as {
@@ -579,6 +639,8 @@ export function Chat() {
   const accountInitial =
     userEmail?.trim()[0]?.toUpperCase() ?? userEmail?.trim()[0] ?? "؟";
 
+  const showAccountSetup = !meReady || siteStatus === "provisioning";
+
   return (
     <div className="app-root" style={styles.page}>
       <header className="app-header-bar" style={styles.header}>
@@ -617,6 +679,8 @@ export function Chat() {
           )}
         </div>
 
+        <div style={styles.headerSide}>
+          {!showAccountSetup && (
         <div style={styles.tabGroup} role="tablist" aria-label="بخش‌های اصلی">
           <button
             type="button"
@@ -645,17 +709,18 @@ export function Chat() {
             ساخت
           </button>
         </div>
+          )}
+        </div>
 
         <div style={styles.headerSide} />
       </header>
 
-      {(siteStatus === "provisioning" || siteStatus === "failed") && (
+      {showAccountSetup ? (
+        <AccountSetupWaitingView />
+      ) : (
+        <>
+      {siteStatus === "failed" && (
         <div style={styles.banner}>
-          {siteStatus === "provisioning" && (
-            <p style={styles.provisioning}>در حال راه‌اندازی مخزن گیت‌هاب و پروژه ورسل…</p>
-          )}
-          {siteStatus === "failed" && (
-            <>
               <p style={styles.provisioningError}>
                 {provisioningError ??
                   "راه‌اندازی کامل نشد. دوباره تلاش کنید یا اگر گیت‌هاب و ورسل وصل هستند صفحه را رفرش کنید."}
@@ -668,8 +733,6 @@ export function Chat() {
               >
                 {retryingProvision ? "در حال تلاش…" : "تلاش مجدد راه‌اندازی"}
               </button>
-            </>
-          )}
         </div>
       )}
 
@@ -686,29 +749,62 @@ export function Chat() {
           </div>
 
           <footer className="app-composer" style={styles.footer}>
-            <button
-              type="button"
-              style={styles.sendButton}
-              disabled={busy || !input.trim() || siteStatus !== "active"}
-              aria-label={busy ? "در حال ساخت" : "ارسال"}
-              onClick={() => void send()}
-            >
-              {busy ? "…" : "↑"}
-            </button>
-            <textarea
-              style={styles.input}
-              rows={1}
-              placeholder="تغییرات سایت را بنویسید…"
-              value={input}
-              disabled={busy}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void send();
+            {attachments.hiddenFileInput}
+            {attachments.attachmentStrip}
+            <div style={styles.composerShell}>
+              <button
+                type="button"
+                style={{
+                  ...styles.attachButton,
+                  opacity: attachments.attachButtonDisabled ? 0.4 : 1,
+                  cursor: attachments.attachButtonDisabled ? "not-allowed" : "pointer",
+                }}
+                disabled={attachments.attachButtonDisabled}
+                aria-label="پیوست تصویر"
+                title="پیوست تصویر (حداکثر ۵)"
+                onClick={attachments.openFilePicker}
+              >
+                {attachments.isProcessingFiles ? (
+                  <span style={{ fontSize: 14 }}>…</span>
+                ) : (
+                  <ComposerPaperclipIcon />
+                )}
+              </button>
+              <textarea
+                style={styles.inputInner}
+                rows={1}
+                placeholder="تغییرات سایت را بنویسید…"
+                value={input}
+                disabled={busy}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void send();
+                  }
+                }}
+              />
+              <button
+                type="button"
+                style={{
+                  ...styles.sendButton,
+                  ...(busy ||
+                  !attachments.canSendWithText(input) ||
+                  siteStatus !== "active"
+                    ? styles.sendButtonDisabled
+                    : {}),
+                }}
+                disabled={
+                  busy ||
+                  !attachments.canSendWithText(input) ||
+                  siteStatus !== "active"
                 }
-              }}
-            />
+                aria-label={busy ? "در حال ساخت" : "ارسال"}
+                onClick={() => void send()}
+              >
+                {busy ? "…" : "↑"}
+              </button>
+            </div>
           </footer>
         </div>
       ) : (
@@ -779,6 +875,8 @@ export function Chat() {
           )}
         </div>
       )}
+        </>
+      )}
     </div>
   );
 }
@@ -844,6 +942,18 @@ function renderChatItems(
                 مشاهده پیش‌نمایش
               </button>
             </span>
+          </>
+        ) : item.kind === "user" ? (
+          <>
+            {item.text ? <div>{item.text}</div> : null}
+            {item.imagePreviews?.length ? (
+              <div style={styles.userImageRow}>
+                {item.imagePreviews.map((src) => (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img key={src.slice(0, 48)} src={src} alt="" style={styles.userImageThumb} />
+                ))}
+              </div>
+            ) : null}
           </>
         ) : (
           item.text
@@ -1026,38 +1136,82 @@ const styles: Record<string, CSSProperties> = {
   placeholder: { color: "var(--muted)", fontSize: 14, lineHeight: 1.6, margin: 0 },
   footer: {
     display: "flex",
-    flexDirection: "row",
-    alignItems: "flex-end",
-    gap: 8,
+    flexDirection: "column",
+    alignItems: "stretch",
+    gap: 0,
     paddingTop: 10,
     borderTop: "1px solid var(--border)",
     background: "var(--bg)",
   },
-  input: {
+  composerShell: {
+    display: "flex",
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 2,
+    width: "100%",
+    padding: "6px 8px",
+    borderRadius: 14,
+    border: "1px solid var(--border)",
+    background: "var(--input-bg)",
+  },
+  attachButton: {
+    flexShrink: 0,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 36,
+    height: 36,
+    padding: 0,
+    border: "none",
+    borderRadius: 10,
+    background: "transparent",
+    color: "var(--muted)",
+  },
+  inputInner: {
     flex: 1,
     resize: "none",
-    padding: "12px 14px",
-    borderRadius: 14,
-    border: "1px solid transparent",
-    background: "var(--input-bg)",
+    padding: "8px 6px",
+    borderRadius: 0,
+    border: "none",
+    background: "transparent",
     color: "var(--text)",
-    minHeight: 44,
+    minHeight: 36,
     lineHeight: 1.45,
+    outline: "none",
+  },
+  userImageRow: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 6,
+    marginTop: 8,
+  },
+  userImageThumb: {
+    width: 72,
+    height: 72,
+    objectFit: "cover",
+    borderRadius: 8,
+    border: "1px solid rgba(255,255,255,0.2)",
   },
   sendButton: {
     flexShrink: 0,
-    width: 44,
-    height: 44,
-    borderRadius: 12,
+    width: 34,
+    height: 34,
+    borderRadius: "50%",
     border: "none",
-    background: "var(--accent)",
-    color: "#fff",
+    background: "#fff",
+    color: "#111",
     fontWeight: 700,
-    fontSize: 18,
+    fontSize: 17,
     cursor: "pointer",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
+    marginInlineStart: 2,
+    marginBottom: 1,
+  },
+  sendButtonDisabled: {
+    opacity: 0.35,
+    cursor: "not-allowed",
   },
   inlineLinkButton: {
     padding: 0,

@@ -285,13 +285,59 @@ function vercel403Help(teamId: string | undefined): string {
   return parts.join(" ");
 }
 
-async function fetchDeployments(projectId: string, teamId: string | undefined, token: string) {
+async function fetchDeployments(
+  projectId: string,
+  teamId: string | undefined,
+  token: string,
+  limit = 20
+) {
   const teamQuery = deploymentsTeamQuery(teamId);
-  const url = `https://api.vercel.com/v6/deployments?projectId=${encodeURIComponent(projectId)}&limit=20${teamQuery}`;
+  const url = `https://api.vercel.com/v6/deployments?projectId=${encodeURIComponent(projectId)}&limit=${limit}${teamQuery}`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
   });
   return { res, url };
+}
+
+function readyDeploymentsWithCommit(deployments: VercelDeployment[]): VercelDeployment[] {
+  return deployments.filter((d) => {
+    const state = d.readyState ?? d.state;
+    return state === "READY" && Boolean(d.meta?.githubCommitSha?.trim());
+  });
+}
+
+/** Oldest / newest READY deployment SHAs for preview gate backfill. */
+export async function fetchReadyDeploymentCommitRange(options: {
+  projectId: string;
+  teamId?: string;
+  limit?: number;
+}): Promise<{ oldest?: string; newest?: string }> {
+  const cfg = getConfig();
+  const limit = options.limit ?? 100;
+  let { res } = await fetchDeployments(
+    options.projectId,
+    options.teamId ?? cfg.vercelTeamId,
+    cfg.vercelToken,
+    limit
+  );
+
+  if (res.status === 403 && options.teamId && !options.teamId.startsWith("team_")) {
+    ({ res } = await fetchDeployments(options.projectId, undefined, cfg.vercelToken, limit));
+  }
+
+  if (!res.ok) {
+    return {};
+  }
+
+  const data = (await res.json()) as DeploymentsResponse;
+  const ready = readyDeploymentsWithCommit(data.deployments).sort(
+    (a, b) => a.createdAt - b.createdAt
+  );
+  if (ready.length === 0) return {};
+
+  const oldest = ready[0].meta!.githubCommitSha!.trim();
+  const newest = ready[ready.length - 1].meta!.githubCommitSha!.trim();
+  return { oldest, newest };
 }
 
 export type PreviewUrlResult = {

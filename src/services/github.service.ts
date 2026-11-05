@@ -145,3 +145,88 @@ export async function createRepoFromTemplate(options: {
     defaultBranch: data.default_branch ?? platform.defaultBranch,
   };
 }
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Tip of the default branch (template baseline for a newly generated customer repo). */
+export async function getDefaultBranchHeadSha(
+  repoFullName: string,
+  branch?: string
+): Promise<string> {
+  const platform = getPlatformConfig();
+  const refBranch = branch?.trim() || platform.defaultBranch;
+  const res = await githubApi(
+    `/repos/${repoFullName}/git/ref/heads/${encodeURIComponent(refBranch)}`
+  );
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`GitHub ref lookup failed (${res.status}): ${text.slice(0, 200)}`);
+  }
+  const data = (await res.json()) as { object?: { sha?: string } };
+  const sha = data.object?.sha?.trim();
+  if (!sha) {
+    throw new Error(`GitHub ref ${repoFullName}@${refBranch} returned no sha`);
+  }
+  return sha;
+}
+
+async function getLatestCommitShaOnBranch(
+  repoFullName: string,
+  branch?: string
+): Promise<string | null> {
+  const platform = getPlatformConfig();
+  const refBranch = branch?.trim() || platform.defaultBranch;
+  const res = await githubApi(
+    `/repos/${repoFullName}/commits?sha=${encodeURIComponent(refBranch)}&per_page=1`
+  );
+  if (!res.ok) return null;
+  const data = (await res.json()) as { sha?: string }[];
+  const sha = data[0]?.sha?.trim();
+  return sha || null;
+}
+
+function isEmptyOrPendingRepoError(message: string): boolean {
+  return (
+    message.includes("409") ||
+    message.includes("empty") ||
+    message.includes("Git Repository is empty")
+  );
+}
+
+/**
+ * Template-generated repos can briefly have no refs (409 empty). Poll until the initial commit exists.
+ */
+export async function waitForDefaultBranchHeadSha(
+  repoFullName: string,
+  branch?: string,
+  options?: { maxAttempts?: number; delayMs?: number }
+): Promise<string> {
+  const maxAttempts = options?.maxAttempts ?? 24;
+  const delayMs = options?.delayMs ?? 1500;
+  let lastError: Error | undefined;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await getDefaultBranchHeadSha(repoFullName, branch);
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+      if (!isEmptyOrPendingRepoError(lastError.message) || attempt === maxAttempts - 1) {
+        break;
+      }
+      await sleep(delayMs);
+    }
+  }
+
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const sha = await getLatestCommitShaOnBranch(repoFullName, branch);
+    if (sha) return sha;
+    await sleep(delayMs);
+  }
+
+  throw (
+    lastError ??
+    new Error(`Timed out waiting for initial commit on ${repoFullName} (template may still be copying).`)
+  );
+}

@@ -46,7 +46,12 @@ export async function GET(req: NextRequest) {
       start(controller) {
         const encoder = new TextEncoder();
         const push = (sseEvent: string, data: Record<string, unknown>, id?: string) => {
-          controller.enqueue(encoder.encode(sseEncode(sseEvent, data, id)));
+          if (doneSent) return;
+          try {
+            controller.enqueue(encoder.encode(sseEncode(sseEvent, data, id)));
+          } catch {
+            finish();
+          }
         };
 
         const finish = (reason?: string) => {
@@ -97,6 +102,7 @@ export async function GET(req: NextRequest) {
                 finish();
               }
             } catch (e) {
+              if (doneSent) return;
               push("error", {
                 eventId: `poll-${Date.now()}`,
                 message: e instanceof Error ? e.message : "Stream poll error",

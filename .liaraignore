@@ -1,0 +1,11 @@
+node_modules
+.next
+.env
+.env.local
+.env*.local
+.git
+.cursor
+terminals
+*.log
+template/node_modules
+template/.next

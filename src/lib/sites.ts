@@ -6,10 +6,12 @@ import {
   type SiteWithResources,
 } from "@/lib/site-runtime";
 import type { CodingEngine } from "@prisma/client";
+import { clientProductionUrl, isPreviewUnlocked } from "@/lib/preview-gate";
 
 const DEFAULT_SITE_SLUG = "default";
 
 export function serializeSiteForClient(site: SiteWithResources) {
+  const resources = site.resources;
   return {
     id: site.id,
     slug: site.slug,
@@ -18,11 +20,12 @@ export function serializeSiteForClient(site: SiteWithResources) {
     statusChangedAt: site.statusChangedAt.toISOString(),
     activatedAt: site.activatedAt?.toISOString() ?? null,
     suspendReason: site.suspendReason ?? null,
-    provisioningStep: site.resources?.provisioningStep ?? null,
-    provisioningError: site.resources?.provisioningError ?? null,
-    provisioningAttempts: site.resources?.provisioningAttempts ?? 0,
-    productionUrl: site.resources?.productionUrl ?? null,
-    githubRepoFullName: site.resources?.githubRepoFullName ?? null,
+    provisioningStep: resources?.provisioningStep ?? null,
+    provisioningError: resources?.provisioningError ?? null,
+    provisioningAttempts: resources?.provisioningAttempts ?? 0,
+    productionUrl: clientProductionUrl(resources),
+    previewAvailable: isPreviewUnlocked(resources),
+    githubRepoFullName: resources?.githubRepoFullName ?? null,
   };
 }
 

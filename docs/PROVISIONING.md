@@ -7,7 +7,7 @@ Each **Site** gets its own GitHub repository and Vercel project. Provisioning is
 ## Prerequisites (manual)
 
 1. **GitHub template** — The repo in `TEMPLATE_REPO_URL` (e.g. `builder-clinic-template`) must have **Template repository** enabled in GitHub Settings (`is_template: true`). The Generate from Template API fails otherwise.
-2. **Starter content** — Prefer a minimal Next.js **skeleton** (routing, Tailwind, deploy config). Customer design comes from chat prompts, not a fixed clinic layout in the template.
+2. **Starter content** — Minimal Next.js skeleton in `template/` (`globals.css`, `AGENTS.md`). Customer sites come from chat, not fixed demo content in the template.
 3. **Tokens**
    - `PLATFORM_GITHUB_TOKEN` (or `GITHUB_TOKEN`) — create repos from template.
    - `VERCEL_TOKEN` + `VERCEL_TEAM_ID` — create projects; Vercel GitHub integration must access new repos on that team.
@@ -28,6 +28,8 @@ Site (provisioning)
   → optional wait for first READY deployment
   → Site (active)
 ```
+
+**Preview gate:** `baselineCommitSha` is captured when the customer repo is created. `productionCommitSha` tracks the latest READY Vercel deploy. The app only returns `productionUrl` to the client when those commits differ. Legacy sites backfill both SHAs from Vercel history on `GET /api/me`.
 
 ## APIs
 

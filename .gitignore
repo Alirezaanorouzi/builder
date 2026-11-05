@@ -17,4 +17,5 @@ template/.env.local
 *.db
 *.db-journal
 prisma/dev.db
+src/prisma/dev.db
 prisma/prisma/

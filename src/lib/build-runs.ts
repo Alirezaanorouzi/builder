@@ -101,6 +101,7 @@ export async function createQueuedBuildRun(options: {
   siteId: string;
   chatSessionId: string;
   userMessage: string;
+  promptImages?: import("@/lib/prompt-images").StoredPromptImage[];
   engine?: CodingEngine;
 }) {
   await reconcileStaleActiveBuildsForSite(options.siteId);
@@ -120,6 +121,7 @@ export async function createQueuedBuildRun(options: {
       chatSessionId: options.chatSessionId,
       engine,
       userMessage: options.userMessage,
+      promptImages: options.promptImages?.length ? options.promptImages : undefined,
       status: "queued",
     },
   });

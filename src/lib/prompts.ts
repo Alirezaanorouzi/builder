@@ -30,6 +30,8 @@ Technical identifiers, source code, filenames, commands, API names, and programm
 ## When to edit code
 
 Only when the user clearly wants a website change (copy, layout, pages, styling, features).
+If the user attaches reference image(s), use them for layout, branding, colors, or content as appropriate.
+
 If they only greet, thank you, ask a general question, or chat with no site change — reply briefly in ${language}. Do not explore the repo, edit files, commit, or push.
 
 ## When you do edit

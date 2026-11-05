@@ -18,6 +18,10 @@ import {
   ensureDefaultSite,
   getOrCreateChatSession,
 } from "@/lib/sites";
+import {
+  parsePromptImagesFromClient,
+  type StoredPromptImage,
+} from "@/lib/prompt-images";
 import { kickInlineWorkerTick } from "@/lib/build-worker";
 
 export async function handleChatSend(
@@ -31,16 +35,28 @@ export async function handleChatSend(
     return Response.json({ error: message }, { status: 500 });
   }
 
-  let body: { message?: string; siteId?: string; chatSessionId?: string };
+  let body: {
+    message?: string;
+    siteId?: string;
+    chatSessionId?: string;
+    images?: unknown;
+  };
   try {
     body = (await req.json()) as typeof body;
   } catch {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const message = body.message?.trim();
-  if (!message) {
-    return Response.json({ error: "message is required" }, { status: 400 });
+  const message = body.message?.trim() ?? "";
+  let promptImages: StoredPromptImage[] = [];
+  try {
+    promptImages = parsePromptImagesFromClient(body.images);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Invalid images";
+    return Response.json({ error: msg }, { status: 400 });
+  }
+  if (!message && promptImages.length === 0) {
+    return Response.json({ error: "message or images required" }, { status: 400 });
   }
 
   try {
@@ -61,7 +77,10 @@ export async function handleChatSend(
     const buildRun = await createQueuedBuildRun({
       siteId,
       chatSessionId: chatSession.id,
-      userMessage: message,
+      userMessage:
+        message ||
+        "Use the attached reference image(s) when updating the website.",
+      promptImages,
     });
 
     kickInlineWorkerTick();

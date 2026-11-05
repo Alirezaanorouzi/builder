@@ -2,6 +2,10 @@ import { prisma } from "@/lib/db";
 import { getCodingEngine } from "@engines/index";
 import { buildAgentUserPrompt } from "@/lib/prompts";
 import {
+  parseStoredPromptImages,
+  storedImagesToSdk,
+} from "@/lib/prompt-images";
+import {
   publishBuildRunDone,
   publishEngineStreamEvent,
   updateBuildRunStatus,
@@ -9,16 +13,20 @@ import {
 import { publishBuildStream } from "@/lib/build-stream-bus";
 import { resolveTenantContext } from "@/lib/site-runtime";
 import { setChatSessionEngineAgentId, setSiteCursorAgentId } from "@/lib/sites";
-import { waitForDeployment } from "@/services/vercel.service";
+import { waitForDeployment, fetchReadyDeploymentCommitRange } from "@/services/vercel.service";
+import { recordProductionCommit, refreshProductionCommitWhenLocked } from "@/services/preview-commit.service";
 import { vercelDeployPollOptions } from "@/lib/vercel-deploy-poll";
 
 async function attachPreviewWhenReady(
   buildRunId: string,
+  siteId: string,
   tenant: ReturnType<typeof resolveTenantContext>,
   startedAtMs: number,
   commitSha?: string
 ) {
   try {
+    await refreshProductionCommitWhenLocked(siteId);
+
     const deploy = await waitForDeployment({
       projectId: tenant.vercelProjectId,
       teamId: tenant.vercelTeamId,
@@ -27,6 +35,17 @@ async function attachPreviewWhenReady(
       sinceMs: startedAtMs,
       ...vercelDeployPollOptions(),
     });
+    if (deploy.commitSha) {
+      await recordProductionCommit(siteId, deploy.commitSha);
+    } else if (tenant.vercelProjectId) {
+      const range = await fetchReadyDeploymentCommitRange({
+        projectId: tenant.vercelProjectId,
+        teamId: tenant.vercelTeamId,
+      });
+      if (range.newest) {
+        await recordProductionCommit(siteId, range.newest);
+      }
+    }
     if (deploy.url) {
       await updateBuildRunStatus(buildRunId, "succeeded", {
         commitSha: deploy.commitSha ?? commitSha,
@@ -55,6 +74,7 @@ export async function executeBuildRun(buildRunId: string): Promise<void> {
   try {
     const tenant = resolveTenantContext(run.site);
     const engine = getCodingEngine();
+    const promptImages = storedImagesToSdk(parseStoredPromptImages(run.promptImages));
     const promptText = buildAgentUserPrompt(run.userMessage);
 
     await updateBuildRunStatus(buildRunId, "running", {
@@ -69,6 +89,7 @@ export async function executeBuildRun(buildRunId: string): Promise<void> {
     const result = await engine.executeRun(
       {
         promptText,
+        promptImages: promptImages.length ? promptImages : undefined,
         agentId: existingAgentId,
         tenant,
       },
@@ -93,7 +114,13 @@ export async function executeBuildRun(buildRunId: string): Promise<void> {
       });
 
       if (result.requestPreview && tenant.vercelProjectId) {
-        void attachPreviewWhenReady(buildRunId, tenant, startedAtMs, result.commitSha);
+        void attachPreviewWhenReady(
+          buildRunId,
+          run.site.id,
+          tenant,
+          startedAtMs,
+          result.commitSha
+        );
       }
     } else {
       terminalStatus = await updateBuildRunStatus(buildRunId, "failed", {

@@ -2,7 +2,8 @@ import { prisma } from "@/lib/db";
 import { getPlatformConfig } from "@/lib/config";
 import type { ProvisioningStep } from "@prisma/client";
 import { transitionSiteStatus } from "@/services/site-status.service";
-import { createRepoFromTemplate } from "./github.service";
+import { recordBaselineCommit, recordProductionCommit } from "@/services/preview-commit.service";
+import { createRepoFromTemplate, waitForDefaultBranchHeadSha } from "./github.service";
 import { createVercelProjectForRepo } from "./vercel.service";
 
 function sleep(ms: number) {
@@ -120,7 +121,20 @@ export async function runSiteProvisioning(siteId: string): Promise<void> {
           provisioningError: null,
         },
       });
+      const baselineSha = await waitForDefaultBranchHeadSha(githubFullName, branch);
+      await recordBaselineCommit(siteId, baselineSha);
       step = "github_repo_created";
+    }
+
+    if (githubFullName) {
+      const resourcesForBaseline = await prisma.siteResources.findUnique({
+        where: { siteId },
+        select: { baselineCommitSha: true },
+      });
+      if (!resourcesForBaseline?.baselineCommitSha) {
+        const baselineSha = await waitForDefaultBranchHeadSha(githubFullName, branch);
+        await recordBaselineCommit(siteId, baselineSha);
+      }
     }
 
     if (githubFullName) {
@@ -147,13 +161,16 @@ export async function runSiteProvisioning(siteId: string): Promise<void> {
       await setStep(siteId, "pending_initial_deploy");
       try {
         const { waitForDeployment } = await import("@/services/vercel.service");
-        await waitForDeployment({
+        const initialDeploy = await waitForDeployment({
           projectId: project.id,
           teamId: platform.vercelTeamId,
           productionUrl: project.productionUrl ?? undefined,
           maxAttempts: 18,
           delayMs: 10_000,
         });
+        if (initialDeploy.commitSha) {
+          await recordProductionCommit(siteId, initialDeploy.commitSha);
+        }
       } catch {
         /* initial deploy may still be building — site can still become active */
       }

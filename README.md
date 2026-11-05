@@ -55,6 +55,8 @@ Agent options used:
 
 Auth + sites use **PostgreSQL** (`DATABASE_URL`). See [docs/DATABASE.md](docs/DATABASE.md) (Liara, Docker, or Neon).
 
+**Production on Liara:** [docs/LIARA.md](docs/LIARA.md) — `liara.json`, `@liara/cli`, and env vars on the Liara app.
+
 ## Project layout
 
 ```

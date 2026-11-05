@@ -151,6 +151,10 @@ model SiteResources {
   vercelProjectId        String?
   vercelTeamId           String?
   productionUrl          String?
+  /** Default-branch tip when the customer repo was created from template. */
+  baselineCommitSha      String?
+  /** Latest known READY production deployment commit (Vercel meta.githubCommitSha). */
+  productionCommitSha    String?
   cursorAgentId          String?
   cursorAgentStatus      String?
   createdAt              DateTime         @default(now())
@@ -195,6 +199,8 @@ model BuildRun {
   engineRunId   String?
   status        BuildRunStatus @default(queued)
   userMessage   String
+  /** Base64 image payloads for Cursor Cloud Agent (`prompt.images`). */
+  promptImages  Json?
   commitSha     String?
   deploymentId  String?
   deployUrl     String?
