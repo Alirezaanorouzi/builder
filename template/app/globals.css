@@ -1,0 +1,75 @@
+/* Minimal global baseline — extend via CSS variables; avoid replacing this file unless asked. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  hanging-punctuation: first last;
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  font-family: var(--font-sans), system-ui, sans-serif;
+  font-size: 1rem;
+  line-height: 1.6;
+  color: var(--color-text);
+  background: var(--color-bg);
+}
+
+img,
+picture,
+video,
+canvas,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+input,
+button,
+textarea,
+select {
+  font: inherit;
+}
+
+a {
+  color: var(--color-link);
+}
+
+:root {
+  --font-sans: ui-sans-serif, system-ui, sans-serif;
+
+  --color-bg: #fafafa;
+  --color-surface: #ffffff;
+  --color-text: #171717;
+  --color-muted: #525252;
+  --color-border: #e5e5e5;
+  --color-link: #2563eb;
+  --color-accent: #2563eb;
+
+  --space-page: clamp(1rem, 4vw, 2rem);
+  --max-width: 72rem;
+  --radius: 0.75rem;
+}
+
+.site-main {
+  width: min(100% - 2 * var(--space-page), var(--max-width));
+  margin-inline: auto;
+  padding-block: calc(var(--space-page) * 2);
+}
+
+.site-main h1 {
+  font-size: clamp(1.75rem, 4vw, 2.25rem);
+  line-height: 1.2;
+  margin: 0 0 0.75rem;
+}
+
+.site-main p {
+  margin: 0 0 1rem;
+  color: var(--color-muted);
+}
