@@ -2,8 +2,49 @@ import { assertCursorConfig } from "@engines/cursor/provider";
 
 export type CodingEngineId = "cursor";
 
+/** Default Cloud Agent model when `CURSOR_MODEL_ID` is unset. */
+export const DEFAULT_CURSOR_MODEL_ID = "composer-2.5";
+
+export type CursorModelParam = { id: string; value: string };
+
+export type CursorModelSelection = {
+  id: string;
+  params?: CursorModelParam[];
+};
+
 export function getCodingEngineId(): CodingEngineId {
   return "cursor";
+}
+
+/** Resolved model id for Cursor `/v1/agents` and follow-up runs. */
+export function resolveCursorModelId(envOverride?: string): string {
+  const fromEnv = envOverride ?? process.env.CURSOR_MODEL_ID?.trim();
+  return fromEnv || DEFAULT_CURSOR_MODEL_ID;
+}
+
+/**
+ * Composer 2.5 defaults to the **fast** billed variant unless `fast=false` is sent.
+ * Dashboard default does not apply to API — must set params explicitly.
+ * @see https://cursor.com/docs/cloud-agent/api/endpoints
+ */
+export function getCursorModelSelection(modelId?: string): CursorModelSelection {
+  const raw = (modelId ?? resolveCursorModelId()).trim();
+  const wantFast =
+    raw === "composer-2.5-fast" ||
+    process.env.CURSOR_COMPOSER_FAST?.trim() === "1";
+
+  if (raw === "composer-2.5" || raw === "composer-2.5-fast") {
+    return {
+      id: "composer-2.5",
+      params: [{ id: "fast", value: wantFast ? "true" : "false" }],
+    };
+  }
+
+  return { id: raw };
+}
+
+export function cursorAgentModelField(modelId?: string): { model: CursorModelSelection } {
+  return { model: getCursorModelSelection(modelId) };
 }
 
 /** Platform secrets and defaults for provisioning (not per-customer). */
@@ -75,7 +116,7 @@ export function getConfig() {
   /** Must be `team_…` from Team Settings → General, not the dashboard URL slug. */
   const vercelTeamId = process.env.VERCEL_TEAM_ID?.trim();
   const vercelProductionUrl = process.env.VERCEL_PRODUCTION_URL?.trim();
-  const cursorModelId = process.env.CURSOR_MODEL_ID?.trim();
+  const cursorModelId = resolveCursorModelId();
 
   return {
     codingEngine: getCodingEngineId(),

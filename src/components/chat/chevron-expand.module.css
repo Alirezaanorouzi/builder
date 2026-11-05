@@ -1,0 +1,10 @@
+.icon {
+  flex-shrink: 0;
+  color: var(--muted);
+  transform: rotate(90deg);
+  transition: transform 0.2s ease;
+}
+
+.expanded {
+  transform: rotate(-90deg);
+}

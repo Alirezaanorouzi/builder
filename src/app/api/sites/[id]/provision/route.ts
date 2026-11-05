@@ -1,6 +1,6 @@
 import { assertSiteAccess, jsonError, requireSessionUser } from "@/lib/access";
 import { prisma } from "@/lib/db";
-import { processOneWorkerTick } from "@/lib/build-worker";
+import { kickInlineWorkerTick } from "@/lib/build-worker";
 import { serializeSiteForClient } from "@/lib/sites";
 import { transitionSiteStatus } from "@/services/site-status.service";
 
@@ -24,9 +24,7 @@ export async function POST(_req: Request, { params }: Params) {
       },
     });
 
-    if (process.env.INLINE_BUILD_WORKER === "1") {
-      void processOneWorkerTick();
-    }
+    kickInlineWorkerTick();
 
     const site = await assertSiteAccess(user.id, id);
     return Response.json({ site: serializeSiteForClient(site) });

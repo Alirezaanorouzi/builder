@@ -1,6 +1,7 @@
-import { prisma } from "@/lib/db";
+import { prisma, withDbRetry } from "@/lib/db";
 import { getCodingEngineId } from "@/lib/config";
-import type { BuildRunStatus, CodingEngine, Prisma } from "@prisma/client";
+import { publishBuildStream } from "@/lib/build-stream-bus";
+import type { BuildRunStatus, CodingEngine } from "@prisma/client";
 import type { EngineStreamEvent } from "@engines/types";
 import { HttpError } from "@/lib/access";
 
@@ -18,6 +19,77 @@ export const TERMINAL_BUILD_STATUSES: BuildRunStatus[] = [
   "cancelled",
 ];
 
+/** When this Node process booted — active runs not touched since then are orphaned (e.g. dev restart). */
+const PROCESS_STARTED_AT = Date.now();
+
+function buildRunIdleStaleMs(): number {
+  const raw = process.env.BUILD_RUN_STALE_MINUTES?.trim();
+  if (raw) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) return n * 60 * 1000;
+  }
+  return process.env.NODE_ENV === "development" ? 3 * 60 * 1000 : 20 * 60 * 1000;
+}
+
+function queuedWithoutWorkerMs(): number {
+  return process.env.NODE_ENV === "development" ? 90 * 1000 : 5 * 60 * 1000;
+}
+
+/** Mark an interrupted run terminal so a new build can be queued. */
+export async function failInterruptedBuildRun(buildRunId: string, message: string) {
+  const finishedAt = new Date();
+  await updateBuildRunStatus(buildRunId, "failed", {
+    errorMessage: message,
+    finishedAt,
+  });
+  publishBuildStream(buildRunId, "error", { message });
+  publishBuildStream(buildRunId, "done", {
+    runStatus: "failed",
+    errorMessage: message,
+    finishedAt: finishedAt.toISOString(),
+  });
+}
+
+/**
+ * Fail active runs that cannot still be executing (server restart, dead worker, idle agent).
+ * Call before enqueueing a new build for the site.
+ */
+export async function reconcileStaleActiveBuildsForSite(siteId: string): Promise<void> {
+  const actives = await prisma.buildRun.findMany({
+    where: { siteId, status: { in: ACTIVE_BUILD_STATUSES } },
+    orderBy: { createdAt: "asc" },
+  });
+
+  const processStart = new Date(PROCESS_STARTED_AT);
+
+  for (const run of actives) {
+    if (run.updatedAt < processStart) {
+      await failInterruptedBuildRun(
+        run.id,
+        "Previous build did not finish (app restarted or worker stopped)."
+      );
+      continue;
+    }
+
+    if (run.status === "queued") {
+      const waitMs = Date.now() - run.createdAt.getTime();
+      if (waitMs > queuedWithoutWorkerMs()) {
+        await failInterruptedBuildRun(
+          run.id,
+          "Build stayed queued too long. Start the worker or enable INLINE_BUILD_WORKER=1."
+        );
+      }
+      continue;
+    }
+
+    const lastActivity = run.updatedAt ?? run.startedAt ?? run.createdAt;
+    const idleMs = Date.now() - lastActivity.getTime();
+    if (idleMs > buildRunIdleStaleMs()) {
+      await failInterruptedBuildRun(run.id, "Build timed out with no activity.");
+    }
+  }
+}
+
 export async function findActiveBuildForSite(siteId: string) {
   return prisma.buildRun.findFirst({
     where: { siteId, status: { in: ACTIVE_BUILD_STATUSES } },
@@ -31,6 +103,8 @@ export async function createQueuedBuildRun(options: {
   userMessage: string;
   engine?: CodingEngine;
 }) {
+  await reconcileStaleActiveBuildsForSite(options.siteId);
+
   const active = await findActiveBuildForSite(options.siteId);
   if (active) {
     throw new HttpError(
@@ -51,37 +125,33 @@ export async function createQueuedBuildRun(options: {
   });
 }
 
-export async function appendBuildEvent(
-  buildRunId: string,
-  eventType: string,
-  options?: { message?: string; payload?: Record<string, unknown> }
-) {
-  return prisma.buildEvent.create({
-    data: {
-      buildRunId,
-      eventType,
-      message: options?.message ?? null,
-      payload: options?.payload
-        ? (options.payload as Prisma.InputJsonValue)
-        : undefined,
-    },
-  });
-}
-
-export function engineEventToBuildEventType(event: EngineStreamEvent): {
-  eventType: string;
-  message?: string;
-  payload?: Record<string, unknown>;
-} {
+/** Push a coding-engine stream event to in-memory SSE subscribers (not Postgres). */
+export function publishEngineStreamEvent(buildRunId: string, event: EngineStreamEvent) {
   switch (event.type) {
     case "status":
-      return { eventType: "status", message: event.message };
+      publishBuildStream(buildRunId, "status", { message: event.message });
+      break;
     case "assistant":
-      return { eventType: "assistant", payload: { text: event.text } };
+      publishBuildStream(buildRunId, "assistant", { text: event.text });
+      break;
     case "activity":
-      return { eventType: "activity", message: event.message };
+      publishBuildStream(buildRunId, "activity", {
+        message: event.message,
+        tool: event.meta?.tool,
+        path: event.meta?.path,
+        agentStatus: event.meta?.status,
+      });
+      break;
     case "error":
-      return { eventType: "error", message: event.message };
+      publishBuildStream(buildRunId, "error", { message: event.message });
+      break;
+    case "agent_done":
+      publishBuildStream(buildRunId, "agent_done", {
+        runStatus: event.status === "succeeded" ? "succeeded" : "failed",
+        errorMessage: event.errorMessage,
+        finishedAt: event.finishedAt,
+      });
+      break;
   }
 }
 
@@ -98,22 +168,32 @@ export async function updateBuildRunStatus(
     finishedAt?: Date;
   }
 ) {
-  return prisma.buildRun.update({
-    where: { id: buildRunId },
-    data: {
-      status,
-      ...patch,
-      updatedAt: new Date(),
-    },
-  });
+  return withDbRetry(() =>
+    prisma.buildRun.update({
+      where: { id: buildRunId },
+      data: {
+        status,
+        ...patch,
+        updatedAt: new Date(),
+      },
+    })
+  );
 }
 
-export async function listBuildEventsSince(buildRunId: string, afterCreatedAt?: Date) {
-  return prisma.buildEvent.findMany({
-    where: {
-      buildRunId,
-      ...(afterCreatedAt ? { createdAt: { gt: afterCreatedAt } } : {}),
-    },
-    orderBy: { createdAt: "asc" },
+export function publishBuildRunDone(
+  buildRunId: string,
+  run: {
+    status: BuildRunStatus;
+    errorMessage?: string | null;
+    startedAt?: Date | null;
+    finishedAt?: Date | null;
+  }
+) {
+  const finishedAt = run.finishedAt ?? new Date();
+  publishBuildStream(buildRunId, "done", {
+    runStatus: run.status,
+    errorMessage: run.errorMessage ?? undefined,
+    startedAt: run.startedAt?.toISOString(),
+    finishedAt: finishedAt.toISOString(),
   });
 }

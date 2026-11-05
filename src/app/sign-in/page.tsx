@@ -1,12 +1,13 @@
 "use client";
 
-import { FormEvent, useState, type CSSProperties } from "react";
-import { useRouter } from "next/navigation";
+import { FormEvent, Suspense, useEffect, useState, type CSSProperties } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { authClient } from "@/lib/auth-client";
 import { signOutBuilderAccount } from "@/lib/sign-out";
 
-export default function SignInPage() {
+function SignInPageInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { data: session, isPending } = authClient.useSession();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -14,6 +15,12 @@ export default function SignInPage() {
   const [mode, setMode] = useState<"sign-in" | "sign-up">("sign-in");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (searchParams.get("mode") === "sign-up") {
+      setMode("sign-up");
+    }
+  }, [searchParams]);
 
   async function handleSignOut() {
     setError(null);
@@ -42,7 +49,7 @@ export default function SignInPage() {
           name: name || email.split("@")[0] || "User",
         });
         if (res.error) {
-          setError(res.error.message ?? "Sign up failed");
+          setError(res.error.message ?? "ثبت‌نام ناموفق بود");
           return;
         }
       } else {
@@ -51,39 +58,44 @@ export default function SignInPage() {
           password,
         });
         if (res.error) {
-          setError(res.error.message ?? "Sign in failed");
+          setError(res.error.message ?? "ورود ناموفق بود");
           return;
         }
       }
       router.push("/");
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
+      setError(err instanceof Error ? err.message : "خطایی رخ داد");
     } finally {
       setBusy(false);
     }
   }
 
   if (!isPending && session?.user) {
-    const signedInEmail = session.user.email ?? "your account";
+    const signedInEmail = session.user.email ?? "حساب شما";
     return (
-      <div style={{ maxWidth: 400, margin: "48px auto", padding: 16 }}>
-        <h1 style={{ fontSize: 22 }}>Already signed in</h1>
-        <p style={{ color: "var(--muted)", fontSize: 14 }}>
-          You are signed in as <strong>{signedInEmail}</strong>. Sign out to create or test another account.
+      <div className="app-sign-in" style={{ paddingTop: 48 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 600 }}>قبلاً وارد شده‌اید</h1>
+        <p style={{ color: "var(--muted)", fontSize: 14, lineHeight: 1.6 }}>
+          با <strong dir="ltr">{signedInEmail}</strong> وارد هستید. برای تست حساب دیگر ابتدا خارج شوید.
         </p>
         {error && <p style={{ color: "#ffb4b4", fontSize: 14 }}>{error}</p>}
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 24 }}>
           <button type="button" style={buttonStyle} onClick={() => router.push("/")}>
-            Continue to builder
+            رفتن به سازنده
           </button>
           <button
             type="button"
             disabled={busy}
-            style={{ ...buttonStyle, background: "transparent", color: "var(--accent)", border: "1px solid var(--border)" }}
+            style={{
+              ...buttonStyle,
+              background: "transparent",
+              color: "var(--accent)",
+              border: "1px solid var(--border)",
+            }}
             onClick={() => void handleSignOut()}
           >
-            {busy ? "…" : "Sign out"}
+            {busy ? "…" : "خروج"}
           </button>
         </div>
       </div>
@@ -91,16 +103,21 @@ export default function SignInPage() {
   }
 
   return (
-    <div style={{ maxWidth: 400, margin: "48px auto", padding: 16 }}>
-      <h1 style={{ fontSize: 22 }}>{mode === "sign-in" ? "Sign in" : "Create account"}</h1>
-      <p style={{ color: "var(--muted)", fontSize: 14 }}>
-        Required for multi-tenant builds. Set `DATABASE_URL` to your Postgres connection string (e.g. Liara).
+    <div className="app-sign-in" style={{ paddingTop: 48 }}>
+      <h1 style={{ fontSize: 22, fontWeight: 600 }}>
+        {mode === "sign-in" ? "ورود" : "ساخت حساب"}
+      </h1>
+      <p style={{ color: "var(--muted)", fontSize: 14, lineHeight: 1.6 }}>
+        با ایمیل و رمز عبور (حداقل ۸ کاراکتر). بعد از ثبت‌نام، سایت شما خودکار ساخته می‌شود.
       </p>
-      <form onSubmit={(e) => void onSubmit(e)} style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 24 }}>
+      <form
+        onSubmit={(e) => void onSubmit(e)}
+        style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 24 }}
+      >
         {mode === "sign-up" && (
           <input
             type="text"
-            placeholder="Name"
+            placeholder="نام"
             value={name}
             onChange={(e) => setName(e.target.value)}
             style={inputStyle}
@@ -108,24 +125,26 @@ export default function SignInPage() {
         )}
         <input
           type="email"
-          placeholder="Email"
+          placeholder="ایمیل"
           required
+          dir="ltr"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           style={inputStyle}
         />
         <input
           type="password"
-          placeholder="Password"
+          placeholder="رمز عبور (حداقل ۸ کاراکتر)"
           required
           minLength={8}
+          dir="ltr"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           style={inputStyle}
         />
         {error && <p style={{ color: "#ffb4b4", fontSize: 14 }}>{error}</p>}
         <button type="submit" disabled={busy} style={buttonStyle}>
-          {busy ? "…" : mode === "sign-in" ? "Sign in" : "Sign up"}
+          {busy ? "…" : mode === "sign-in" ? "ورود" : "ثبت‌نام"}
         </button>
       </form>
       <button
@@ -133,23 +152,37 @@ export default function SignInPage() {
         style={{ ...buttonStyle, background: "transparent", color: "var(--accent)", marginTop: 12 }}
         onClick={() => setMode(mode === "sign-in" ? "sign-up" : "sign-in")}
       >
-        {mode === "sign-in" ? "Need an account? Sign up" : "Already have an account? Sign in"}
+        {mode === "sign-in" ? "حساب ندارید؟ ثبت‌نام" : "حساب دارید؟ ورود"}
       </button>
     </div>
   );
 }
 
+export default function SignInPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="app-sign-in" style={{ textAlign: "center" }}>
+          در حال بارگذاری…
+        </div>
+      }
+    >
+      <SignInPageInner />
+    </Suspense>
+  );
+}
+
 const inputStyle: CSSProperties = {
   padding: 12,
-  borderRadius: 10,
+  borderRadius: 12,
   border: "1px solid var(--border)",
-  background: "var(--surface)",
+  background: "var(--input-bg)",
   color: "var(--text)",
 };
 
 const buttonStyle: CSSProperties = {
   padding: "12px 16px",
-  borderRadius: 10,
+  borderRadius: 12,
   border: "none",
   background: "var(--accent)",
   color: "#fff",

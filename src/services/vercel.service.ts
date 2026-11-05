@@ -1,4 +1,5 @@
 import { assertPlatformProvisioningConfig, getConfig } from "@/lib/config";
+import { VERCEL_DEPLOY_POLL_INTERVAL_MS, VERCEL_DEPLOY_POLL_MAX_ATTEMPTS } from "@/lib/vercel-deploy-poll";
 
 export interface CreatedVercelProject {
   id: string;
@@ -192,10 +193,6 @@ export async function createVercelProjectForRepo(options: {
           type: "github",
           repo: options.githubRepoFullName,
         },
-        gitProviderOptions: {
-          createDeployments: "enabled",
-          disableRepositoryDispatchEvents: false,
-        },
       }),
     });
 
@@ -210,7 +207,9 @@ export async function createVercelProjectForRepo(options: {
     } else if (!res.ok) {
       const text = await res.text();
       throw new Error(
-        `Vercel create project failed (${res.status}). Token team must match VERCEL_TEAM_ID (${platform.vercelTeamId ?? "personal"}). GitHub integration must access ${options.githubRepoFullName}. Raw: ${text}`
+        `Vercel create project failed (${res.status}) for ${options.githubRepoFullName}. ` +
+          `Check VERCEL_TOKEN scope and VERCEL_TEAM_ID (${platform.vercelTeamId ?? "personal"}), ` +
+          `and that the Vercel GitHub App can access the repo. Raw: ${text}`
       );
     } else {
       const data = (await res.json()) as {
@@ -330,8 +329,8 @@ export async function waitForDeployment(options: {
   const projectId = options.projectId;
   const teamId = options.teamId ?? cfg.vercelTeamId;
   const sinceMs = options.sinceMs ?? Date.now() - 60_000;
-  const maxAttempts = options.maxAttempts ?? 30;
-  const delayMs = options.delayMs ?? 10_000;
+  const maxAttempts = options.maxAttempts ?? VERCEL_DEPLOY_POLL_MAX_ATTEMPTS;
+  const delayMs = options.delayMs ?? VERCEL_DEPLOY_POLL_INTERVAL_MS;
   const commitSha = options.commitSha?.trim();
   const fallbackProduction = options.productionUrl ?? cfg.vercelProductionUrl;
 

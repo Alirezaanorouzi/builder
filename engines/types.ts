@@ -22,31 +22,39 @@ export interface StartRunInput {
   tenant: TenantContext;
 }
 
-export interface StartRunResult {
+export interface ExecuteRunResult extends EngineStreamResult {
   agentId: string;
   runId: string;
 }
 
 export interface CodingEngineProvider {
   readonly id: CodingEngineId;
-  startRun(input: StartRunInput): Promise<StartRunResult>;
-  streamRun(
-    agentId: string,
-    runId: string,
-    startedAt: number,
-    tenant: TenantContext,
+  executeRun(
+    input: StartRunInput,
     onEvent: (event: EngineStreamEvent) => void
-  ): Promise<EngineStreamResult>;
+  ): Promise<ExecuteRunResult>;
 }
 
 /** Alias used in architecture docs. */
 export type CodingAgentProvider = CodingEngineProvider;
 
+export type ActivityEventMeta = {
+  tool?: string;
+  path?: string;
+  status?: string;
+};
+
 export type EngineStreamEvent =
   | { type: "status"; message: string }
   | { type: "assistant"; text: string }
-  | { type: "activity"; message: string }
-  | { type: "error"; message: string };
+  | { type: "activity"; message: string; meta?: ActivityEventMeta }
+  | { type: "error"; message: string }
+  | {
+      type: "agent_done";
+      status: "succeeded" | "failed";
+      errorMessage?: string;
+      finishedAt?: string;
+    };
 
 export interface EngineStreamResult {
   finished: boolean;

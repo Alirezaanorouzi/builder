@@ -1,0 +1,111 @@
+.root {
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.65;
+  word-break: break-word;
+}
+
+.root :first-child {
+  margin-top: 0;
+}
+
+.root :last-child {
+  margin-bottom: 0;
+}
+
+.root p {
+  margin: 0 0 0.65em;
+}
+
+.root p:last-child {
+  margin-bottom: 0;
+}
+
+.root strong {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.root em {
+  font-style: italic;
+}
+
+.root ul,
+.root ol {
+  margin: 0.35em 0 0.75em;
+  padding-inline-start: 1.35em;
+}
+
+.root ul {
+  list-style-type: disc;
+}
+
+.root ol {
+  list-style-type: decimal;
+}
+
+.root li {
+  margin: 0.25em 0;
+}
+
+.root li > p {
+  margin: 0;
+}
+
+.root code {
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 0.9em;
+  padding: 0.12em 0.35em;
+  border-radius: 4px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+}
+
+.root pre {
+  margin: 0.5em 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.root pre code {
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-size: 13px;
+}
+
+.root a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.root h1,
+.root h2,
+.root h3 {
+  margin: 0.75em 0 0.35em;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.root h1 {
+  font-size: 1.15em;
+}
+
+.root h2 {
+  font-size: 1.08em;
+}
+
+.root h3 {
+  font-size: 1em;
+}
+
+.root blockquote {
+  margin: 0.5em 0;
+  padding-inline-start: 12px;
+  border-inline-start: 2px solid var(--border);
+  color: var(--muted);
+}

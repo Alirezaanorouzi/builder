@@ -1,5 +1,5 @@
 import { requireSessionUser, jsonError } from "@/lib/access";
-import { processOneWorkerTick } from "@/lib/build-worker";
+import { kickInlineWorkerTick } from "@/lib/build-worker";
 import { ensureDefaultSite, listSitesForUser, serializeSiteForClient } from "@/lib/sites";
 import { getPlatformUser } from "@/services/user.service";
 
@@ -10,9 +10,7 @@ export async function GET() {
     const session = await requireSessionUser();
     const profile = await getPlatformUser(session.id);
     await ensureDefaultSite(session.id);
-    if (process.env.INLINE_BUILD_WORKER === "1") {
-      void processOneWorkerTick();
-    }
+    kickInlineWorkerTick();
     const sites = await listSitesForUser(session.id);
     return Response.json({
       user: {

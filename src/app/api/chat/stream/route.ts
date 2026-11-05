@@ -6,17 +6,12 @@ import {
   requireSessionUser,
 } from "@/lib/access";
 import { prisma } from "@/lib/db";
-import {
-  listBuildEventsSince,
-  TERMINAL_BUILD_STATUSES,
-} from "@/lib/build-runs";
+import { withDbRetry } from "@/lib/db";
+import { TERMINAL_BUILD_STATUSES } from "@/lib/build-runs";
+import { buildStreamBus, streamEventToSse } from "@/lib/build-stream-bus";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
-}
 
 function sseEncode(event: string, data: unknown, id?: string): string {
   let chunk = "";
@@ -24,36 +19,6 @@ function sseEncode(event: string, data: unknown, id?: string): string {
   chunk += `event: ${event}\n`;
   chunk += `data: ${JSON.stringify(data)}\n\n`;
   return chunk;
-}
-
-function pushEventFromRow(
-  push: (event: string, data: unknown) => void,
-  row: { eventType: string; message: string | null; payload: unknown }
-) {
-  const type = row.eventType;
-  if (type === "assistant") {
-    const payload = row.payload as { text?: string } | null;
-    push("assistant", { text: payload?.text ?? row.message ?? "" });
-    return;
-  }
-  if (type === "preview") {
-    const payload = row.payload as { url?: string } | null;
-    if (payload?.url) push("preview", { url: payload.url });
-    return;
-  }
-  if (type === "done") {
-    push("done", {});
-    return;
-  }
-  if (type === "error") {
-    push("error", { message: row.message ?? "Error" });
-    return;
-  }
-  if (type === "status" || type === "activity") {
-    push(type, { message: row.message ?? "" });
-    return;
-  }
-  push("status", { message: row.message ?? type });
 }
 
 export async function GET(req: NextRequest) {
@@ -73,49 +38,76 @@ export async function GET(req: NextRequest) {
     const user = await requireSessionUser();
     await assertBuildRunAccess(user.id, buildRunId);
 
+    let unsubscribe = () => {};
+    let pollTimer: ReturnType<typeof setInterval> | undefined;
+    let doneSent = false;
+
     const stream = new ReadableStream({
-      async start(controller) {
+      start(controller) {
         const encoder = new TextEncoder();
-        const push = (event: string, data: unknown) => {
-          controller.enqueue(encoder.encode(sseEncode(event, data)));
+        const push = (sseEvent: string, data: Record<string, unknown>, id?: string) => {
+          controller.enqueue(encoder.encode(sseEncode(sseEvent, data, id)));
         };
 
-        let lastCreatedAt: Date | undefined;
-        let terminal = false;
-
-        try {
-          for (;;) {
-            const events = await listBuildEventsSince(buildRunId, lastCreatedAt);
-            for (const row of events) {
-              pushEventFromRow(push, row);
-              lastCreatedAt = row.createdAt;
-              if (row.eventType === "done") terminal = true;
-            }
-
-            const run = await prisma.buildRun.findUnique({
-              where: { id: buildRunId },
-            });
-            if (!run) break;
-
-            if (
-              TERMINAL_BUILD_STATUSES.includes(run.status) &&
-              (terminal || events.some((e) => e.eventType === "done"))
-            ) {
-              if (!terminal) push("done", {});
-              break;
-            }
-
-            if (terminal) break;
-
-            await sleep(800);
+        const finish = (reason?: string) => {
+          if (doneSent) return;
+          doneSent = true;
+          if (reason) {
+            push("error", { eventId: `close-${Date.now()}`, message: reason });
           }
-        } catch (e) {
-          push("error", {
-            message: e instanceof Error ? e.message : "Stream error",
-          });
-        } finally {
-          controller.close();
-        }
+          unsubscribe();
+          if (pollTimer) clearInterval(pollTimer);
+          try {
+            controller.close();
+          } catch {
+            /* already closed */
+          }
+          setTimeout(() => buildStreamBus.drop(buildRunId), 10_000);
+        };
+
+        unsubscribe = buildStreamBus.subscribe(buildRunId, (ev) => {
+          const { sseEvent, data } = streamEventToSse(ev);
+          push(sseEvent, data, String(data.eventId ?? ev.id));
+          if (ev.type === "done") finish();
+        });
+
+        pollTimer = setInterval(() => {
+          void (async () => {
+            if (doneSent) return;
+            try {
+              const run = await withDbRetry(() =>
+                prisma.buildRun.findUnique({ where: { id: buildRunId } })
+              );
+              if (!run) {
+                finish("Build run not found");
+                return;
+              }
+              if (TERMINAL_BUILD_STATUSES.includes(run.status)) {
+                push(
+                  "done",
+                  {
+                    eventId: `run-terminal-${run.id}`,
+                    status: run.status,
+                    errorMessage: run.errorMessage ?? undefined,
+                    startedAt: run.startedAt?.toISOString(),
+                    finishedAt: (run.finishedAt ?? new Date()).toISOString(),
+                  },
+                  `run-terminal-${run.id}`
+                );
+                finish();
+              }
+            } catch (e) {
+              push("error", {
+                eventId: `poll-${Date.now()}`,
+                message: e instanceof Error ? e.message : "Stream poll error",
+              });
+            }
+          })();
+        }, 2000);
+      },
+      cancel() {
+        unsubscribe();
+        if (pollTimer) clearInterval(pollTimer);
       },
     });
 

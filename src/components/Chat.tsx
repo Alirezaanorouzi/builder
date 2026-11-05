@@ -6,8 +6,20 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
+import { AgentActivity } from "@/components/AgentActivity";
+import { ChatMarkdown } from "@/components/chat/ChatMarkdown";
+import { PreviewWaitingView } from "@/components/preview-waiting";
+import {
+  applyRawActivityEvent,
+  finalizeAgentActivity,
+  terminalPhaseFromRunStatus,
+  type AgentActivitySnapshot,
+  type AgentRunPhase,
+  type RawActivityInput,
+} from "@/lib/agent-activity";
 import { signOutBuilderAccount } from "@/lib/sign-out";
 import {
   BUILDER_BUILD_RUN_KEY,
@@ -15,17 +27,22 @@ import {
   BUILDER_SITE_ID_KEY,
 } from "@/lib/builder-client-storage";
 
-type ChatLine =
-  | { kind: "user"; text: string }
-  | { kind: "status"; text: string }
-  | { kind: "assistant"; text: string }
-  | { kind: "activity"; text: string }
-  | { kind: "preview"; url: string }
-  | { kind: "error"; text: string };
+type ChatItem =
+  | { id: string; kind: "user"; text: string }
+  | { id: string; kind: "assistant"; text: string; buildRunId: string }
+  | { id: string; kind: "agentActivity"; buildRunId: string; snapshot: AgentActivitySnapshot }
+  | { id: string; kind: "preview"; url: string }
+  | { id: string; kind: "error"; text: string };
 
 const CHAT_SESSION_KEY = BUILDER_CHAT_SESSION_KEY;
 const SITE_ID_KEY = BUILDER_SITE_ID_KEY;
 const BUILD_RUN_KEY = BUILDER_BUILD_RUN_KEY;
+
+/** Delay before auto-refreshing preview after agent finishes (GitHub → Vercel deploy). */
+const PREVIEW_AUTO_REFRESH_DELAY_MS = 30_000;
+
+const PREVIEW_WAIT_BUILDING = "در حال ساخت سایت…";
+const PREVIEW_WAIT_PUBLISHING = "در حال منتشر کردن برنامه…";
 
 type SiteSummary = {
   id: string;
@@ -33,6 +50,42 @@ type SiteSummary = {
   provisioningError?: string | null;
   productionUrl?: string | null;
 };
+
+type SsePayload = {
+  eventId?: string;
+  message?: string;
+  text?: string;
+  url?: string;
+  tool?: string;
+  path?: string;
+  status?: string;
+  errorMessage?: string;
+  startedAt?: string;
+  finishedAt?: string;
+};
+
+function buildPreviewIframeSrc(baseUrl: string, refreshKey: number): string {
+  try {
+    const url = new URL(baseUrl.includes("://") ? baseUrl : `https://${baseUrl}`);
+    url.searchParams.set("_builder", String(refreshKey));
+    return url.toString();
+  } catch {
+    return baseUrl;
+  }
+}
+
+function newId() {
+  return crypto.randomUUID();
+}
+
+function initialActivitySnapshot(startedAtMs?: number): AgentActivitySnapshot {
+  return {
+    phase: "working",
+    startedAtMs: startedAtMs ?? Date.now(),
+    timeline: [],
+    expanded: false,
+  };
+}
 
 export function Chat() {
   const router = useRouter();
@@ -42,14 +95,141 @@ export function Chat() {
   const [provisioningError, setProvisioningError] = useState<string | null>(null);
   const [chatSessionId, setChatSessionId] = useState<string | null>(null);
   const [input, setInput] = useState("");
-  const [lines, setLines] = useState<ChatLine[]>([]);
+  const [items, setItems] = useState<ChatItem[]>([]);
   const [busy, setBusy] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [signingOut, setSigningOut] = useState(false);
   const [retryingProvision, setRetryingProvision] = useState(false);
-  const [previewMode, setPreviewMode] = useState<"desktop" | "mobile">("desktop");
+  const [previewMode, setPreviewMode] = useState<"desktop" | "mobile">("mobile");
+  const [activeTab, setActiveTab] = useState<"build" | "preview">("build");
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [buildWaitStartedAt, setBuildWaitStartedAt] = useState<number>(() => Date.now());
+  const [previewRefreshKey, setPreviewRefreshKey] = useState(0);
+  const [previewPublishing, setPreviewPublishing] = useState(false);
+  const [publishWaitStartedAt, setPublishWaitStartedAt] = useState<number>(() => Date.now());
   const bottomRef = useRef<HTMLDivElement>(null);
+  const accountRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
+  const seenEventIdsRef = useRef<Map<string, Set<string>>>(new Map());
+  const activeBuildRunRef = useRef<string | null>(null);
+  const previewRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previewRefreshScheduledRef = useRef(false);
+
+  const getSeenSet = useCallback((buildRunId: string) => {
+    let set = seenEventIdsRef.current.get(buildRunId);
+    if (!set) {
+      set = new Set();
+      seenEventIdsRef.current.set(buildRunId, set);
+    }
+    return set;
+  }, []);
+
+  const updateActivity = useCallback(
+    (buildRunId: string, updater: (snap: AgentActivitySnapshot) => AgentActivitySnapshot) => {
+      setItems((prev) =>
+        prev.map((item) => {
+          if (item.kind !== "agentActivity" || item.buildRunId !== buildRunId) return item;
+          return { ...item, snapshot: updater(item.snapshot) };
+        })
+      );
+    },
+    []
+  );
+
+  const ingestActivity = useCallback(
+    (buildRunId: string, input: RawActivityInput) => {
+      const seen = getSeenSet(buildRunId);
+      updateActivity(buildRunId, (snap) => applyRawActivityEvent(snap, input, seen));
+    },
+    [getSeenSet, updateActivity]
+  );
+
+  const appendAssistantChunk = useCallback((buildRunId: string, eventId: string, text: string) => {
+    const seen = getSeenSet(buildRunId);
+    if (seen.has(eventId)) return;
+    seen.add(eventId);
+
+    setItems((prev) => {
+      const idx = prev.findIndex(
+        (i) => i.kind === "assistant" && i.buildRunId === buildRunId
+      );
+      let next: ChatItem[];
+      if (idx >= 0) {
+        const cur = prev[idx];
+        if (cur.kind !== "assistant") return prev;
+        next = [...prev];
+        next[idx] = { ...cur, text: cur.text + text };
+      } else {
+        const activityIdx = prev.findIndex(
+          (i) => i.kind === "agentActivity" && i.buildRunId === buildRunId
+        );
+        const insertAt = activityIdx >= 0 ? activityIdx + 1 : prev.length;
+        next = [...prev];
+        next.splice(insertAt, 0, {
+          id: newId(),
+          kind: "assistant",
+          buildRunId,
+          text,
+        });
+      }
+      return next.map((item) => {
+        if (item.kind === "agentActivity" && item.buildRunId === buildRunId) {
+          return {
+            ...item,
+            snapshot: { ...item.snapshot, receivedAssistant: true },
+          };
+        }
+        return item;
+      });
+    });
+  }, [getSeenSet]);
+
+  const ensureActivityBlock = useCallback((buildRunId: string, startedAtMs?: number) => {
+    setItems((prev) => {
+      if (prev.some((i) => i.kind === "agentActivity" && i.buildRunId === buildRunId)) {
+        return prev;
+      }
+      return [
+        ...prev,
+        {
+          id: newId(),
+          kind: "agentActivity",
+          buildRunId,
+          snapshot: initialActivitySnapshot(startedAtMs),
+        },
+      ];
+    });
+  }, []);
+
+  const finishBuildRun = useCallback(
+    (
+      buildRunId: string,
+      data: {
+        status?: string;
+        errorMessage?: string;
+        startedAt?: string;
+        finishedAt?: string;
+      }
+    ) => {
+      const mapped = data.status ? terminalPhaseFromRunStatus(data.status) : null;
+      const phase: AgentRunPhase = mapped ?? (data.errorMessage ? "failed" : "completed");
+      const endedAtMs = data.finishedAt ? Date.parse(data.finishedAt) : Date.now();
+      const startedAtMs = data.startedAt ? Date.parse(data.startedAt) : undefined;
+
+      updateActivity(buildRunId, (snap) => {
+        if (snap.phase !== "working") return snap;
+        let next = snap;
+        if (startedAtMs && !Number.isNaN(startedAtMs)) {
+          next = { ...next, startedAtMs };
+        }
+        return finalizeAgentActivity(next, phase, {
+          endedAtMs,
+          errorMessage: data.errorMessage,
+        });
+      });
+    },
+    [updateActivity]
+  );
 
   const loadMe = useCallback(async () => {
     const res = await fetch("/api/me");
@@ -76,51 +256,146 @@ export function Chat() {
   }, []);
 
   const closeStream = useCallback(() => {
+    if (previewRefreshTimerRef.current) {
+      clearTimeout(previewRefreshTimerRef.current);
+      previewRefreshTimerRef.current = null;
+    }
+    setPreviewPublishing(false);
     esRef.current?.close();
     esRef.current = null;
+    activeBuildRunRef.current = null;
   }, []);
 
-  const appendLine = useCallback((line: ChatLine) => {
-    setLines((prev) => [...prev, line]);
+  const appendError = useCallback((text: string) => {
+    setItems((prev) => [...prev, { id: newId(), kind: "error", text }]);
   }, []);
+
+  const refreshPreview = useCallback(() => {
+    setPreviewRefreshKey((k) => k + 1);
+  }, []);
+
+  const schedulePreviewRefreshAfterBuild = useCallback(() => {
+    if (previewRefreshScheduledRef.current) return;
+    previewRefreshScheduledRef.current = true;
+    if (previewRefreshTimerRef.current) {
+      clearTimeout(previewRefreshTimerRef.current);
+    }
+    setPublishWaitStartedAt(Date.now());
+    setPreviewPublishing(true);
+    previewRefreshTimerRef.current = setTimeout(() => {
+      previewRefreshTimerRef.current = null;
+      setPreviewPublishing(false);
+      refreshPreview();
+    }, PREVIEW_AUTO_REFRESH_DELAY_MS);
+  }, [refreshPreview]);
+
+  const applyAgentRunTerminal = useCallback(
+    (buildRunId: string, data: SsePayload) => {
+      finishBuildRun(buildRunId, data);
+      const failed =
+        data.status === "failed" ||
+        data.status === "cancelled" ||
+        Boolean(data.errorMessage);
+      if (!failed) {
+        schedulePreviewRefreshAfterBuild();
+      }
+      setBusy(false);
+    },
+    [finishBuildRun, schedulePreviewRefreshAfterBuild]
+  );
+
+  const handleSsePayload = useCallback(
+    (buildRunId: string, kind: RawActivityInput["kind"] | "assistant" | "agent_done" | "done", data: SsePayload) => {
+      const eventId = data.eventId ?? `${kind}-${Date.now()}`;
+
+      if (kind === "assistant") {
+        if (data.text) appendAssistantChunk(buildRunId, eventId, data.text);
+        return;
+      }
+
+      if (kind === "agent_done") {
+        const seen = getSeenSet(buildRunId);
+        if (seen.has(eventId)) return;
+        seen.add(eventId);
+        applyAgentRunTerminal(buildRunId, data);
+        return;
+      }
+
+      if (kind === "done") {
+        const seen = getSeenSet(buildRunId);
+        if (seen.has(eventId)) return;
+        seen.add(eventId);
+        applyAgentRunTerminal(buildRunId, data);
+        return;
+      }
+
+      if (kind === "error") {
+        ingestActivity(buildRunId, {
+          eventId,
+          kind: "error",
+          message: data.message ?? "خطایی رخ داد",
+        });
+        finishBuildRun(buildRunId, {
+          status: "failed",
+          errorMessage: data.message,
+        });
+        return;
+      }
+
+      if (kind === "status" || kind === "activity") {
+        if (!data.message?.trim() && kind === "status") return;
+        ingestActivity(buildRunId, {
+          eventId,
+          kind,
+          message: data.message ?? "",
+          meta: {
+            tool: data.tool,
+            path: data.path,
+            status: data.status,
+          },
+        });
+      }
+    },
+    [appendAssistantChunk, applyAgentRunTerminal, finishBuildRun, getSeenSet, ingestActivity]
+  );
 
   const startStream = useCallback(
     (buildRunId: string) => {
       closeStream();
+      activeBuildRunRef.current = buildRunId;
       localStorage.setItem(BUILD_RUN_KEY, buildRunId);
+      previewRefreshScheduledRef.current = false;
+      setBuildWaitStartedAt(Date.now());
+      ensureActivityBlock(buildRunId);
+
       const params = new URLSearchParams({ buildRunId });
       const es = new EventSource(`/api/chat/stream?${params}`);
       esRef.current = es;
 
-      es.addEventListener("status", (ev) => {
-        const data = JSON.parse((ev as MessageEvent).data) as { message?: string };
-        if (data.message) appendLine({ kind: "status", text: data.message });
-      });
+      const bind = (eventName: string, kind: Parameters<typeof handleSsePayload>[1]) => {
+        es.addEventListener(eventName, (ev) => {
+          try {
+            const data = JSON.parse((ev as MessageEvent).data) as SsePayload;
+            handleSsePayload(buildRunId, kind, data);
+          } catch {
+            /* ignore malformed */
+          }
+        });
+      };
 
-      es.addEventListener("assistant", (ev) => {
-        const data = JSON.parse((ev as MessageEvent).data) as { text?: string };
-        if (data.text) appendLine({ kind: "assistant", text: data.text });
-      });
-
-      es.addEventListener("activity", (ev) => {
-        const data = JSON.parse((ev as MessageEvent).data) as { message?: string };
-        if (data.message) appendLine({ kind: "activity", text: data.message });
-      });
-
-      es.addEventListener("preview", (ev) => {
-        const data = JSON.parse((ev as MessageEvent).data) as { url?: string };
-        if (data.url) {
-          setPreviewUrl(data.url);
-          appendLine({ kind: "preview", url: data.url });
-        }
-      });
+      bind("status", "status");
+      bind("activity", "activity");
+      bind("assistant", "assistant");
+      bind("agent_done", "agent_done");
+      bind("done", "done");
 
       es.addEventListener("error", (ev) => {
         try {
-          const data = JSON.parse((ev as MessageEvent).data) as { message?: string };
-          appendLine({ kind: "error", text: data.message ?? "Something went wrong" });
+          const data = JSON.parse((ev as MessageEvent).data) as SsePayload;
+          handleSsePayload(buildRunId, "error", data);
         } catch {
-          appendLine({ kind: "error", text: "Connection lost or stream error" });
+          appendError("اتصال قطع شد یا خطای جریان");
+          finishBuildRun(buildRunId, { status: "failed", errorMessage: "Stream error" });
         }
         setBusy(false);
         localStorage.removeItem(BUILD_RUN_KEY);
@@ -128,20 +403,19 @@ export function Chat() {
       });
 
       es.addEventListener("done", () => {
-        setBusy(false);
         localStorage.removeItem(BUILD_RUN_KEY);
         closeStream();
       });
 
       es.onerror = () => {
         if (es.readyState === EventSource.CLOSED) return;
-        appendLine({ kind: "error", text: "Stream disconnected" });
+        appendError("جریان قطع شد");
+        finishBuildRun(buildRunId, { status: "failed", errorMessage: "Stream disconnected" });
         setBusy(false);
-        localStorage.removeItem(BUILD_RUN_KEY);
         closeStream();
       };
     },
-    [appendLine, closeStream]
+    [appendError, closeStream, ensureActivityBlock, finishBuildRun, handleSsePayload]
   );
 
   useEffect(() => {
@@ -165,9 +439,24 @@ export function Chat() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [lines, busy]);
+  }, [items, busy]);
 
   useEffect(() => () => closeStream(), [closeStream]);
+
+  useEffect(() => {
+    if (!accountOpen) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (accountRef.current && !accountRef.current.contains(e.target as Node)) {
+        setAccountOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [accountOpen]);
+
+  const toggleActivityExpanded = (buildRunId: string) => {
+    updateActivity(buildRunId, (snap) => ({ ...snap, expanded: !snap.expanded }));
+  };
 
   const retryProvisioning = async () => {
     if (!siteId || retryingProvision) return;
@@ -179,7 +468,7 @@ export function Chat() {
       const data = (await res.json()) as { error?: string; site?: SiteSummary };
       if (!res.ok) {
         setSiteStatus("failed");
-        setProvisioningError(data.error ?? "Retry failed");
+        setProvisioningError(data.error ?? "تلاش مجدد ناموفق بود");
         return;
       }
       if (data.site) {
@@ -189,7 +478,7 @@ export function Chat() {
       void loadMe();
     } catch (e) {
       setSiteStatus("failed");
-      setProvisioningError(e instanceof Error ? e.message : "Retry failed");
+      setProvisioningError(e instanceof Error ? e.message : "تلاش مجدد ناموفق بود");
     } finally {
       setRetryingProvision(false);
     }
@@ -203,7 +492,7 @@ export function Chat() {
     try {
       const result = await signOutBuilderAccount();
       if (!result.ok) {
-        appendLine({ kind: "error", text: result.message });
+        appendError(result.message);
         return;
       }
       setUserEmail(null);
@@ -211,7 +500,8 @@ export function Chat() {
       setSiteStatus(null);
       setProvisioningError(null);
       setChatSessionId(null);
-      setLines([]);
+      setItems([]);
+      seenEventIdsRef.current.clear();
       setPreviewUrl(null);
       router.push("/sign-in");
       router.refresh();
@@ -224,22 +514,21 @@ export function Chat() {
     const text = input.trim();
     if (!text || busy) return;
     if (siteStatus && siteStatus !== "active") {
-      appendLine({
-        kind: "error",
-        text:
-          siteStatus === "provisioning"
-            ? "Your site is still being set up (GitHub + Vercel). Wait a moment…"
-            : provisioningError ??
+      appendError(
+        siteStatus === "provisioning"
+          ? "سایت در حال راه‌اندازی است (گیت‌هاب و ورسل). کمی صبر کنید…"
+          : provisioningError ??
               (siteStatus === "failed"
-                ? "Site setup failed or is still finishing. Use “Retry GitHub + Vercel setup” in the header, or refresh the page."
-                : "Site is not ready. Fix provisioning and try again."),
-      });
+                ? "راه‌اندازی سایت کامل نشد. از دکمه تلاش مجدد در بالا استفاده کنید یا صفحه را رفرش کنید."
+                : "سایت آماده نیست. راه‌اندازی را تکمیل کنید و دوباره تلاش کنید.")
+      );
       return;
     }
 
     setInput("");
-    appendLine({ kind: "user", text });
+    setItems((prev) => [...prev, { id: newId(), kind: "user", text }]);
     setBusy(true);
+    setBuildWaitStartedAt(Date.now());
 
     try {
       const res = await fetch("/api/chat/send", {
@@ -260,8 +549,13 @@ export function Chat() {
       };
 
       if (!res.ok) {
-        appendLine({ kind: "error", text: data.error ?? "Request failed" });
-        setBusy(false);
+        if (res.status === 409) {
+          localStorage.removeItem(BUILD_RUN_KEY);
+          setBusy(false);
+          closeStream();
+        }
+        appendError(data.error ?? "درخواست ناموفق بود");
+        if (res.status !== 409) setBusy(false);
         return;
       }
 
@@ -273,192 +567,334 @@ export function Chat() {
       }
       setChatSessionId(sid);
       localStorage.setItem(CHAT_SESSION_KEY, sid);
-      startStream(data.buildRunId!);
+
+      const buildRunId = data.buildRunId!;
+      startStream(buildRunId);
     } catch (e) {
-      appendLine({
-        kind: "error",
-        text: e instanceof Error ? e.message : "Network error",
-      });
+      appendError(e instanceof Error ? e.message : "خطای شبکه");
       setBusy(false);
     }
   };
 
+  const accountInitial =
+    userEmail?.trim()[0]?.toUpperCase() ?? userEmail?.trim()[0] ?? "؟";
+
   return (
-    <div style={styles.page}>
-      <div style={styles.shell}>
-        <header style={styles.header}>
-        <div style={styles.headerRow}>
-          <div>
-            <h1 style={styles.title}>Website Builder</h1>
-            <p style={styles.subtitle}>Describe your site — we build and deploy a preview.</p>
-          </div>
+    <div className="app-root" style={styles.page}>
+      <header className="app-header-bar" style={styles.header}>
+        <div style={styles.headerSide}>
           {userEmail && (
-            <div style={styles.accountBar}>
-              <span style={styles.accountEmail} title={userEmail}>
-                {userEmail}
-              </span>
+            <div ref={accountRef} style={styles.accountWrap}>
               <button
                 type="button"
-                style={styles.signOutButton}
-                disabled={busy || signingOut}
-                onClick={() => void handleSignOut()}
+                style={styles.accountButton}
+                aria-expanded={accountOpen}
+                aria-label="حساب کاربری"
+                onClick={() => setAccountOpen((o) => !o)}
               >
-                {signingOut ? "Signing out…" : "Sign out"}
+                <span style={styles.accountAvatar}>{accountInitial}</span>
               </button>
+              {accountOpen && (
+                <div style={styles.accountMenu} role="menu">
+                  <p style={styles.accountMenuEmail} dir="ltr">
+                    {userEmail}
+                  </p>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    style={styles.accountMenuSignOut}
+                    disabled={busy || signingOut}
+                    onClick={() => {
+                      setAccountOpen(false);
+                      void handleSignOut();
+                    }}
+                  >
+                    {signingOut ? "در حال خروج…" : "خروج"}
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
-        {siteStatus === "provisioning" && (
-          <p style={styles.provisioning}>Setting up your GitHub repo and Vercel project…</p>
-        )}
-        {siteStatus === "failed" && (
-          <>
-            <p style={styles.provisioningError}>
-              {provisioningError ??
-                "Setup did not finish. Retry below, or refresh the page if GitHub and Vercel are already connected."}
-            </p>
-            <button
-              type="button"
-              style={styles.retryProvisionButton}
-              disabled={retryingProvision}
-              onClick={() => void retryProvisioning()}
-            >
-              {retryingProvision ? "Retrying setup…" : "Retry GitHub + Vercel setup"}
-            </button>
-          </>
-        )}
+
+        <div style={styles.tabGroup} role="tablist" aria-label="بخش‌های اصلی">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "preview"}
+            className="app-tab"
+            style={{
+              ...styles.tab,
+              ...(activeTab === "preview" ? styles.tabActive : {}),
+            }}
+            onClick={() => setActiveTab("preview")}
+          >
+            پیش‌نمایش
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "build"}
+            className="app-tab"
+            style={{
+              ...styles.tab,
+              ...(activeTab === "build" ? styles.tabActive : {}),
+            }}
+            onClick={() => setActiveTab("build")}
+          >
+            ساخت
+          </button>
+        </div>
+
+        <div style={styles.headerSide} />
       </header>
 
-      {previewUrl && (
-        <div style={styles.previewBar}>
-          <span style={styles.previewLabel}>Live preview</span>
-          <a href={previewUrl} target="_blank" rel="noreferrer" style={styles.previewLink}>
-            {previewUrl.replace(/^https:\/\//, "")}
-          </a>
+      {(siteStatus === "provisioning" || siteStatus === "failed") && (
+        <div style={styles.banner}>
+          {siteStatus === "provisioning" && (
+            <p style={styles.provisioning}>در حال راه‌اندازی مخزن گیت‌هاب و پروژه ورسل…</p>
+          )}
+          {siteStatus === "failed" && (
+            <>
+              <p style={styles.provisioningError}>
+                {provisioningError ??
+                  "راه‌اندازی کامل نشد. دوباره تلاش کنید یا اگر گیت‌هاب و ورسل وصل هستند صفحه را رفرش کنید."}
+              </p>
+              <button
+                type="button"
+                style={styles.retryProvisionButton}
+                disabled={retryingProvision}
+                onClick={() => void retryProvisioning()}
+              >
+                {retryingProvision ? "در حال تلاش…" : "تلاش مجدد راه‌اندازی"}
+              </button>
+            </>
+          )}
         </div>
       )}
 
-      <div style={styles.chatColumn}>
-        <div style={styles.messages}>
-          {lines.length === 0 && (
-            <p style={styles.placeholder}>
-              Try: &quot;Build a small website for my dental clinic with hours and contact.&quot;
-            </p>
-          )}
-          {lines.map((line, i) => (
-            <div key={i} style={lineStyle(line)}>
-              {line.kind === "preview" ? (
-                <>
-                  <strong>Your site is ready: </strong>
-                  <a href={line.url} target="_blank" rel="noreferrer" style={styles.inlineLink}>
-                    Open preview
-                  </a>
-                </>
-              ) : (
-                line.text
-              )}
-            </div>
-          ))}
-          {busy && <div style={styles.typing}>Working…</div>}
-          <div ref={bottomRef} />
-        </div>
-
-        <footer style={styles.footer}>
-          <textarea
-            style={styles.input}
-            rows={2}
-            placeholder="Describe changes to your website…"
-            value={input}
-            disabled={busy}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                void send();
-              }
-            }}
-          />
-          <button
-            type="button"
-            style={styles.button}
-            disabled={busy || !input.trim() || siteStatus !== "active"}
-            onClick={() => void send()}
-          >
-            {busy ? "Building…" : "Send"}
-          </button>
-        </footer>
-      </div>
-      </div>
-
-      {previewUrl && (
-        <aside style={styles.previewPanel}>
-          <div style={styles.previewPanelHeader}>
-            <span style={styles.previewLabel}>Preview</span>
-            <div style={styles.previewModeToggle}>
-              <button
-                type="button"
-                style={{
-                  ...styles.previewModeButton,
-                  ...(previewMode === "desktop" ? styles.previewModeActive : {}),
-                }}
-                onClick={() => setPreviewMode("desktop")}
-              >
-                Desktop
-              </button>
-              <button
-                type="button"
-                style={{
-                  ...styles.previewModeButton,
-                  ...(previewMode === "mobile" ? styles.previewModeActive : {}),
-                }}
-                onClick={() => setPreviewMode("mobile")}
-              >
-                Mobile
-              </button>
-            </div>
-            <a href={previewUrl} target="_blank" rel="noreferrer" style={styles.previewOpenTab}>
-              Open tab
-            </a>
+      {activeTab === "build" ? (
+        <div className="app-main" style={styles.mainColumn}>
+          <div className="app-messages" style={styles.messages}>
+            {items.length === 0 && (
+              <p style={styles.placeholder}>
+                مثلاً: «یک سایت ساده برای کلینیک دندانپزشکی با ساعات کاری و تماس بساز.»
+              </p>
+            )}
+            {renderChatItems(items, toggleActivityExpanded, setActiveTab, styles)}
+            <div ref={bottomRef} />
           </div>
-          <div
-            style={{
-              ...styles.previewFrameWrap,
-              ...(previewMode === "mobile" ? styles.previewFrameMobile : {}),
-            }}
-          >
-            <iframe
-              title="Site preview"
-              src={previewUrl}
-              style={styles.previewIframe}
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+
+          <footer className="app-composer" style={styles.footer}>
+            <button
+              type="button"
+              style={styles.sendButton}
+              disabled={busy || !input.trim() || siteStatus !== "active"}
+              aria-label={busy ? "در حال ساخت" : "ارسال"}
+              onClick={() => void send()}
+            >
+              {busy ? "…" : "↑"}
+            </button>
+            <textarea
+              style={styles.input}
+              rows={1}
+              placeholder="تغییرات سایت را بنویسید…"
+              value={input}
+              disabled={busy}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void send();
+                }
+              }}
             />
-          </div>
-        </aside>
+          </footer>
+        </div>
+      ) : (
+        <div className="app-preview" style={styles.previewColumn}>
+          {busy || previewPublishing ? (
+            <PreviewWaitingView
+              startedAtMs={busy ? buildWaitStartedAt : publishWaitStartedAt}
+              statusText={busy ? PREVIEW_WAIT_BUILDING : PREVIEW_WAIT_PUBLISHING}
+            />
+          ) : !previewUrl ? (
+            <div style={styles.previewEmpty}>
+              <p style={styles.placeholder}>هنوز پیش‌نمایشی نیست. از تب «ساخت» سایت را بسازید.</p>
+            </div>
+          ) : (
+            <>
+              <div className="app-preview-toolbar" style={styles.previewToolbar}>
+                <button
+                  type="button"
+                  style={styles.previewRefreshButton}
+                  aria-label="بروزرسانی پیش‌نمایش"
+                  onClick={refreshPreview}
+                >
+                  ↻
+                </button>
+                <div className="app-preview-modes" style={styles.previewModeToggle}>
+                  <button
+                    type="button"
+                    style={{
+                      ...styles.previewModeButton,
+                      ...(previewMode === "desktop" ? styles.previewModeActive : {}),
+                    }}
+                    onClick={() => setPreviewMode("desktop")}
+                  >
+                    دسکتاپ
+                  </button>
+                  <button
+                    type="button"
+                    style={{
+                      ...styles.previewModeButton,
+                      ...(previewMode === "mobile" ? styles.previewModeActive : {}),
+                    }}
+                    onClick={() => setPreviewMode("mobile")}
+                  >
+                    موبایل
+                  </button>
+                </div>
+                <a href={previewUrl} target="_blank" rel="noreferrer" style={styles.previewOpenTab}>
+                  باز کردن در تب جدید
+                </a>
+              </div>
+              <div
+                className="app-preview-frame"
+                style={{
+                  ...styles.previewFrameWrap,
+                  ...(previewMode === "mobile" ? styles.previewFrameMobile : {}),
+                }}
+              >
+                <iframe
+                  key={previewRefreshKey}
+                  title="پیش‌نمایش سایت"
+                  src={buildPreviewIframeSrc(previewUrl, previewRefreshKey)}
+                  className="app-preview-iframe"
+                  style={styles.previewIframe}
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                />
+              </div>
+            </>
+          )}
+        </div>
       )}
     </div>
   );
 }
 
-function lineStyle(line: ChatLine): CSSProperties {
+function renderChatItems(
+  items: ChatItem[],
+  toggleActivityExpanded: (buildRunId: string) => void,
+  setActiveTab: (tab: "build" | "preview") => void,
+  styles: Record<string, CSSProperties>
+) {
+  const nodes: ReactNode[] = [];
+  let i = 0;
+
+  while (i < items.length) {
+    const item = items[i];
+
+    if (item.kind === "agentActivity") {
+      const runId = item.buildRunId;
+      const assistants: Extract<ChatItem, { kind: "assistant" }>[] = [];
+      i += 1;
+      while (i < items.length && items[i].kind === "assistant") {
+        const next = items[i] as Extract<ChatItem, { kind: "assistant" }>;
+        if (next.buildRunId !== runId) break;
+        assistants.push(next);
+        i += 1;
+      }
+
+      nodes.push(
+        <div key={item.id} className="chat-assistant-turn">
+          <AgentActivity
+            snapshot={item.snapshot}
+            onToggleExpanded={() => toggleActivityExpanded(runId)}
+          />
+          {assistants.map((a) => (
+            <ChatMarkdown key={a.id} content={a.text} className="chat-assistant-markdown" />
+          ))}
+        </div>
+      );
+      continue;
+    }
+
+    if (item.kind === "assistant") {
+      nodes.push(
+        <div key={item.id} className="chat-assistant-turn">
+          <ChatMarkdown content={item.text} className="chat-assistant-markdown" />
+        </div>
+      );
+      i += 1;
+      continue;
+    }
+
+    nodes.push(
+      <div key={item.id} style={itemStyle(item)}>
+        {item.kind === "preview" ? (
+          <>
+            <span style={styles.previewInline}>
+              سایت آماده است —{" "}
+              <button
+                type="button"
+                style={styles.inlineLinkButton}
+                onClick={() => setActiveTab("preview")}
+              >
+                مشاهده پیش‌نمایش
+              </button>
+            </span>
+          </>
+        ) : (
+          item.text
+        )}
+      </div>
+    );
+    i += 1;
+  }
+
+  return nodes;
+}
+
+function itemStyle(item: ChatItem): CSSProperties {
   const base: CSSProperties = {
-    padding: "10px 12px",
-    borderRadius: 10,
-    maxWidth: "92%",
-    lineHeight: 1.45,
+    padding: "10px 14px",
+    borderRadius: 16,
+    maxWidth: "88%",
+    lineHeight: 1.55,
     fontSize: 15,
   };
-  switch (line.kind) {
+  switch (item.kind) {
     case "user":
-      return { ...base, alignSelf: "flex-end", background: "var(--accent-dim)", color: "#fff" };
+      return { ...base, alignSelf: "flex-start", background: "var(--accent-dim)", color: "#fff" };
     case "assistant":
-      return { ...base, alignSelf: "flex-start", background: "var(--surface)", border: "1px solid var(--border)" };
-    case "status":
-    case "activity":
-      return { ...base, alignSelf: "center", color: "var(--muted)", fontSize: 13, background: "transparent" };
+      return {
+        ...base,
+        alignSelf: "stretch",
+        maxWidth: "100%",
+        padding: 0,
+        background: "transparent",
+      };
     case "preview":
-      return { ...base, alignSelf: "flex-start", background: "#1e3a2f", border: "1px solid var(--success)", color: "var(--success)" };
+      return {
+        ...base,
+        alignSelf: "stretch",
+        maxWidth: "100%",
+        padding: "6px 0",
+        background: "transparent",
+        color: "var(--success)",
+        fontSize: 14,
+      };
     case "error":
-      return { ...base, alignSelf: "flex-start", background: "#3a1e1e", border: "1px solid #c75b5b", color: "#ffb4b4" };
+      return {
+        ...base,
+        alignSelf: "stretch",
+        maxWidth: "100%",
+        padding: "6px 0",
+        background: "transparent",
+        color: "#ffb4b4",
+        fontSize: 14,
+      };
     default:
       return base;
   }
@@ -467,156 +903,230 @@ function lineStyle(line: ChatLine): CSSProperties {
 const styles: Record<string, CSSProperties> = {
   page: {
     display: "flex",
-    flexDirection: "row",
-    minHeight: "100dvh",
-    width: "100%",
+    flexDirection: "column",
   },
-  shell: {
+  header: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+    paddingBlock: 10,
+    borderBottom: "1px solid var(--border)",
+    background: "var(--bg)",
+  },
+  headerSide: {
+    flex: "1 1 0",
+    minWidth: 0,
+    display: "flex",
+    alignItems: "center",
+  },
+  tabGroup: {
+    display: "inline-flex",
+    gap: 4,
+    padding: 4,
+    borderRadius: 999,
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+  },
+  tab: {
+    padding: "8px 22px",
+    borderRadius: 999,
+    border: "none",
+    background: "transparent",
+    color: "var(--muted)",
+    fontSize: 14,
+    fontWeight: 500,
+    cursor: "pointer",
+    transition: "background 0.15s, color 0.15s",
+  },
+  tabActive: {
+    background: "var(--surface-elevated)",
+    color: "var(--text)",
+    boxShadow: "0 1px 2px rgba(0,0,0,0.25)",
+  },
+  accountWrap: { position: "relative" },
+  accountButton: {
+    padding: 0,
+    border: "none",
+    background: "transparent",
+    cursor: "pointer",
+  },
+  accountAvatar: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 36,
+    height: 36,
+    borderRadius: "50%",
+    background: "var(--surface-elevated)",
+    border: "1px solid var(--border)",
+    color: "var(--text)",
+    fontSize: 14,
+    fontWeight: 600,
+  },
+  accountMenu: {
+    position: "absolute",
+    top: "calc(100% + 8px)",
+    insetInlineStart: 0,
+    minWidth: 220,
+    padding: 12,
+    borderRadius: 12,
+    background: "var(--surface-elevated)",
+    border: "1px solid var(--border)",
+    boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
+    zIndex: 20,
+  },
+  accountMenuEmail: {
+    margin: "0 0 10px",
+    fontSize: 13,
+    color: "var(--muted)",
+    wordBreak: "break-all",
+  },
+  accountMenuSignOut: {
+    width: "100%",
+    padding: "8px 10px",
+    borderRadius: 8,
+    border: "1px solid var(--border)",
+    background: "transparent",
+    color: "var(--text)",
+    fontSize: 13,
+    cursor: "pointer",
+  },
+  banner: {
+    padding: "10px 16px",
+    borderBottom: "1px solid var(--border)",
+    background: "var(--surface)",
+  },
+  provisioning: { margin: 0, color: "var(--accent)", fontSize: 13 },
+  provisioningError: { margin: 0, color: "#ffb4b4", fontSize: 13 },
+  retryProvisionButton: {
+    marginTop: 10,
+    padding: "8px 12px",
+    borderRadius: 999,
+    border: "1px solid var(--border)",
+    background: "var(--surface-elevated)",
+    color: "var(--text)",
+    fontSize: 13,
+    cursor: "pointer",
+  },
+  mainColumn: {
     display: "flex",
     flexDirection: "column",
-    flex: "1 1 420px",
-    minWidth: 0,
-    maxWidth: 640,
-    margin: "0 auto",
   },
-  chatColumn: {
+  messages: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 14,
+    padding: "12px 12px 8px",
+  },
+  previewInline: {
+    fontSize: 14,
+    lineHeight: 1.55,
+  },
+  placeholder: { color: "var(--muted)", fontSize: 14, lineHeight: 1.6, margin: 0 },
+  footer: {
+    display: "flex",
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 8,
+    paddingTop: 10,
+    borderTop: "1px solid var(--border)",
+    background: "var(--bg)",
+  },
+  input: {
+    flex: 1,
+    resize: "none",
+    padding: "12px 14px",
+    borderRadius: 14,
+    border: "1px solid transparent",
+    background: "var(--input-bg)",
+    color: "var(--text)",
+    minHeight: 44,
+    lineHeight: 1.45,
+  },
+  sendButton: {
+    flexShrink: 0,
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    border: "none",
+    background: "var(--accent)",
+    color: "#fff",
+    fontWeight: 700,
+    fontSize: 18,
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  inlineLinkButton: {
+    padding: 0,
+    border: "none",
+    background: "none",
+    color: "inherit",
+    fontWeight: 700,
+    cursor: "pointer",
+    textDecoration: "underline",
+  },
+  previewColumn: {
     display: "flex",
     flexDirection: "column",
     flex: 1,
     minHeight: 0,
   },
-  header: {
-    padding: "20px 16px 8px",
-    borderBottom: "1px solid var(--border)",
-  },
-  headerRow: {
-    display: "flex",
-    flexWrap: "wrap",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: 12,
-  },
-  accountBar: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "flex-end",
-    gap: 6,
-    maxWidth: "100%",
-  },
-  accountEmail: {
-    fontSize: 12,
-    color: "var(--muted)",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-    maxWidth: 220,
-  },
-  signOutButton: {
-    padding: "6px 10px",
-    borderRadius: 8,
-    border: "1px solid var(--border)",
-    background: "transparent",
-    color: "var(--muted)",
-    fontSize: 13,
-    cursor: "pointer",
-  },
-  title: { margin: 0, fontSize: 22, fontWeight: 700 },
-  subtitle: { margin: "6px 0 0", color: "var(--muted)", fontSize: 14 },
-  provisioning: { margin: "8px 0 0", color: "var(--accent)", fontSize: 13 },
-  provisioningError: { margin: "8px 0 0", color: "#ffb4b4", fontSize: 13 },
-  retryProvisionButton: {
-    marginTop: 10,
-    padding: "8px 12px",
-    borderRadius: 8,
-    border: "1px solid var(--border)",
-    background: "var(--surface)",
-    color: "var(--text)",
-    fontSize: 13,
-    cursor: "pointer",
-  },
-  previewBar: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 4,
-    padding: "10px 16px",
-    background: "var(--surface)",
-    borderBottom: "1px solid var(--border)",
-  },
-  previewLabel: { fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5 },
-  previewLink: { color: "var(--success)", fontSize: 14, wordBreak: "break-all" },
-  messages: {
+  previewEmpty: {
     flex: 1,
     display: "flex",
-    flexDirection: "column",
-    gap: 8,
-    padding: 16,
-    overflowY: "auto",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 24,
   },
-  placeholder: { color: "var(--muted)", fontSize: 14, lineHeight: 1.5 },
-  typing: { color: "var(--muted)", fontSize: 13, padding: 8 },
-  footer: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 10,
-    padding: 16,
-    borderTop: "1px solid var(--border)",
-    background: "var(--bg)",
-  },
-  input: {
-    width: "100%",
-    resize: "none",
-    padding: 12,
-    borderRadius: 10,
-    border: "1px solid var(--border)",
-    background: "var(--surface)",
-    color: "var(--text)",
-  },
-  button: {
-    padding: "12px 16px",
-    borderRadius: 10,
-    border: "none",
-    background: "var(--accent)",
-    color: "#fff",
-    fontWeight: 600,
-    cursor: "pointer",
-  },
-  inlineLink: { color: "inherit", fontWeight: 700 },
-  previewPanel: {
-    display: "flex",
-    flex: "1 1 50%",
-    flexDirection: "column",
-    borderLeft: "1px solid var(--border)",
-    background: "var(--surface)",
-    minWidth: 0,
-  },
-  previewPanelHeader: {
+  previewToolbar: {
     display: "flex",
     flexWrap: "wrap",
     alignItems: "center",
-    gap: 8,
-    padding: "10px 12px",
+    gap: 10,
+    padding: "10px 16px",
     borderBottom: "1px solid var(--border)",
   },
-  previewModeToggle: { display: "flex", gap: 4, marginLeft: "auto" },
-  previewModeButton: {
-    padding: "4px 8px",
-    fontSize: 12,
-    borderRadius: 6,
+  previewRefreshButton: {
+    width: 34,
+    height: 34,
+    flexShrink: 0,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 999,
     border: "1px solid var(--border)",
+    background: "var(--surface)",
+    color: "var(--text)",
+    fontSize: 18,
+    lineHeight: 1,
+    cursor: "pointer",
+  },
+  previewModeToggle: {
+    display: "inline-flex",
+    gap: 4,
+    padding: 3,
+    borderRadius: 999,
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+  },
+  previewModeButton: {
+    padding: "5px 14px",
+    fontSize: 12,
+    borderRadius: 999,
+    border: "none",
     background: "transparent",
     color: "var(--muted)",
     cursor: "pointer",
   },
   previewModeActive: {
-    background: "var(--accent-dim)",
-    color: "#fff",
-    borderColor: "var(--accent-dim)",
+    background: "var(--surface-elevated)",
+    color: "var(--text)",
   },
-  previewOpenTab: { fontSize: 12, color: "var(--accent)" },
+  previewOpenTab: { marginInlineStart: "auto", fontSize: 13, color: "var(--accent)" },
   previewFrameWrap: {
-    flex: 1,
-    minHeight: 0,
-    padding: 12,
     display: "flex",
     justifyContent: "center",
     alignItems: "stretch",
@@ -630,7 +1140,7 @@ const styles: Record<string, CSSProperties> = {
     flex: 1,
     width: "100%",
     border: "1px solid var(--border)",
-    borderRadius: 8,
+    borderRadius: 12,
     background: "#fff",
   },
 };

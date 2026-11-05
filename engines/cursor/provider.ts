@@ -1,129 +1,89 @@
-import { getConfig } from "@/lib/config";
+import { Agent, CursorAgentError } from "@cursor/sdk";
+import { getConfig, getCursorModelSelection } from "@/lib/config";
+import { streamCloudAgentRun } from "@/services/cursor-cloud-stream";
 import type {
   CodingEngineProvider,
   EngineStreamEvent,
-  EngineStreamResult,
+  ExecuteRunResult,
   StartRunInput,
-  StartRunResult,
-  TenantContext,
 } from "../types";
-import {
-  createAgentWithRun,
-  cursorAuthHeader,
-  cursorStreamUrl,
-  friendlyToolActivity,
-  sendFollowUpRun,
-} from "@/services/cursor.service";
-
-async function consumeCursorSse(
-  agentId: string,
-  runId: string,
-  onEvent: (event: EngineStreamEvent) => void
-): Promise<boolean> {
-  const upstream = await fetch(cursorStreamUrl(agentId, runId), {
-    headers: {
-      Authorization: cursorAuthHeader(),
-      Accept: "text/event-stream",
-    },
-  });
-
-  if (!upstream.ok || !upstream.body) {
-    const text = await upstream.text();
-    throw new Error(`Cursor stream failed (${upstream.status}): ${text}`);
-  }
-
-  const reader = upstream.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let runFinished = false;
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split("\n\n");
-    buffer = parts.pop() ?? "";
-
-    for (const block of parts) {
-      if (!block.trim()) continue;
-
-      let eventType = "message";
-      let dataLine = "";
-
-      for (const line of block.split("\n")) {
-        if (line.startsWith("event:")) eventType = line.slice(6).trim();
-        else if (line.startsWith("data:")) dataLine = line.slice(5).trim();
-      }
-
-      if (!dataLine) continue;
-
-      let payload: Record<string, unknown> = {};
-      try {
-        payload = JSON.parse(dataLine) as Record<string, unknown>;
-      } catch {
-        continue;
-      }
-
-      if (eventType === "thinking") continue;
-
-      if (eventType === "assistant") {
-        const text = String(payload.text ?? "");
-        if (text.trim()) onEvent({ type: "assistant", text });
-        continue;
-      }
-
-      if (eventType === "tool_call") {
-        const name = String(payload.name ?? "");
-        const status = String(payload.status ?? "");
-        const friendly = friendlyToolActivity(name, status);
-        if (friendly) onEvent({ type: "activity", message: friendly });
-        continue;
-      }
-
-      if (eventType === "result") {
-        const status = String(payload.status ?? "");
-        if (status === "FINISHED") {
-          runFinished = true;
-          onEvent({ type: "status", message: "Code updated. Waiting for Vercel deploy…" });
-        } else {
-          onEvent({ type: "status", message: `Run ended: ${status}` });
-        }
-      }
-    }
-  }
-
-  return runFinished;
-}
 
 export const cursorEngineProvider: CodingEngineProvider = {
   id: "cursor",
 
-  async startRun(input: StartRunInput): Promise<StartRunResult> {
-    if (!input.agentId) {
-      return createAgentWithRun(input.promptText, input.tenant);
-    }
-    const { runId } = await sendFollowUpRun(input.agentId, input.promptText);
-    return { agentId: input.agentId, runId };
-  },
-
-  async streamRun(
-    agentId: string,
-    runId: string,
-    _startedAt: number,
-    _tenant: TenantContext,
+  async executeRun(
+    input: StartRunInput,
     onEvent: (event: EngineStreamEvent) => void
-  ): Promise<EngineStreamResult> {
-    onEvent({ type: "status", message: "Connected to Cursor build agent…" });
-    try {
-      const finished = await consumeCursorSse(agentId, runId, onEvent);
-      return { finished, requestPreview: finished };
-    } catch (e) {
+  ): Promise<ExecuteRunResult> {
+    const cfg = getConfig();
+    const apiKey = cfg.cursorApiKey;
+    const model = getCursorModelSelection();
+    const cloud = {
+      repos: [{ url: input.tenant.repoUrl, startingRef: input.tenant.repoRef }],
+      workOnCurrentBranch: true,
+      autoCreatePR: false,
+      skipReviewerRequest: true,
+    };
+
+    const agent = input.agentId
+      ? await Agent.resume(input.agentId, { apiKey, model, cloud })
+      : await Agent.create({ apiKey, model, cloud });
+
+    let agentDoneSent = false;
+    const emitAgentDone = (status: "succeeded" | "failed", errorMessage?: string) => {
+      if (agentDoneSent) return;
+      agentDoneSent = true;
       onEvent({
-        type: "error",
-        message: e instanceof Error ? e.message : "Cursor stream error",
+        type: "agent_done",
+        status,
+        errorMessage,
+        finishedAt: new Date().toISOString(),
       });
-      return { finished: false, requestPreview: false };
+    };
+
+    const forwardStreamEvent = (ev: EngineStreamEvent) => {
+      if (ev.type === "agent_done") {
+        emitAgentDone(ev.status, ev.errorMessage);
+        return;
+      }
+      onEvent(ev);
+    };
+
+    try {
+      const run = await agent.send(input.promptText);
+      const agentId = agent.agentId;
+      const runId = run.id;
+
+      const [finished, result] = await Promise.all([
+        streamCloudAgentRun(agentId, runId, forwardStreamEvent),
+        run.wait(),
+      ]);
+
+      if (result.status === "finished") {
+        emitAgentDone("succeeded");
+      } else if (result.status === "error") {
+        onEvent({
+          type: "error",
+          message: result.error?.message ?? "Cloud agent run failed",
+        });
+        emitAgentDone("failed", result.error?.message ?? "Cloud agent run failed");
+      } else if (!agentDoneSent && finished) {
+        emitAgentDone("succeeded");
+      }
+
+      return {
+        agentId,
+        runId,
+        finished: finished || result.status === "finished",
+        requestPreview: result.status === "finished",
+      };
+    } catch (e) {
+      if (e instanceof CursorAgentError) {
+        throw new Error(`Cursor agent failed: ${e.message}`);
+      }
+      throw e;
+    } finally {
+      await agent.close();
     }
   },
 };

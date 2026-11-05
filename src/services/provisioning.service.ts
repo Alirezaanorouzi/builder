@@ -42,10 +42,11 @@ export async function claimNextProvisioningSite(
   workerId: string,
   leaseMinutes: number
 ): Promise<string | null> {
+  const leaseUntil = new Date(Date.now() + leaseMinutes * 60 * 1000);
   const rows = await prisma.$queryRaw<{ siteId: string }[]>`
     UPDATE "SiteResources"
     SET
-      "provisioningLeaseUntil" = NOW() + make_interval(mins => ${leaseMinutes}),
+      "provisioningLeaseUntil" = ${leaseUntil},
       "provisioningWorkerId" = ${workerId},
       "provisioningAttempts" = "provisioningAttempts" + 1,
       "updatedAt" = NOW()

@@ -1,34 +1,178 @@
 :root {
-  --bg: #0f1419;
-  --surface: #1a2332;
-  --border: #2d3a4f;
-  --text: #e7ecf3;
-  --muted: #8b9cb3;
-  --accent: #5b8def;
-  --accent-dim: #3d6bc7;
-  --success: #3ecf8e;
+  --bg: #0a0a0b;
+  --surface: #141416;
+  --surface-elevated: #1c1c1f;
+  --input-bg: #252528;
+  --border: #2e2e32;
+  --text: #f0f0f2;
+  --muted: #8a8a93;
+  --accent: #6b9fff;
+  --accent-dim: #4a7ad4;
+  --success: #4ade80;
+  --danger: #f87171;
+  --app-max-width: 480px;
 }
 
 * {
   box-sizing: border-box;
 }
 
-html,
-body {
+html {
+  height: 100%;
+  -webkit-text-size-adjust: 100%;
+}
+
+body,
+.app-body {
   margin: 0;
   min-height: 100%;
-  font-family:
-    system-ui,
-    -apple-system,
-    Segoe UI,
-    Roboto,
-    sans-serif;
+  height: 100%;
+  font-family: "Vazirmatn", Tahoma, system-ui, sans-serif;
   background: var(--bg);
   color: var(--text);
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 button,
 input,
 textarea {
   font: inherit;
+  touch-action: manipulation;
+}
+
+input,
+textarea,
+select {
+  font-size: 16px;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.app-messages,
+.app-sign-in {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.app-messages::-webkit-scrollbar,
+.app-sign-in::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.app-root {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: var(--app-max-width);
+  margin-inline: auto;
+  height: 100dvh;
+  height: 100svh;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.app-header-bar {
+  flex-shrink: 0;
+  padding-top: max(10px, env(safe-area-inset-top, 0px));
+  padding-inline: max(12px, env(safe-area-inset-left, 0px))
+    max(12px, env(safe-area-inset-right, 0px));
+}
+
+.app-main,
+.app-preview {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  background: var(--bg);
+}
+
+.chat-assistant-turn {
+  align-self: stretch;
+  max-width: 100%;
+  padding: 2px 0 4px;
+}
+
+.chat-assistant-markdown {
+  margin-top: 8px;
+}
+
+.app-composer {
+  flex-shrink: 0;
+  padding-bottom: max(12px, env(safe-area-inset-bottom, 0px));
+  padding-inline: max(12px, env(safe-area-inset-left, 0px))
+    max(12px, env(safe-area-inset-right, 0px));
+}
+
+.app-composer textarea {
+  font-size: 16px;
+}
+
+.app-preview-toolbar {
+  flex-shrink: 0;
+  padding-inline: max(12px, env(safe-area-inset-left, 0px))
+    max(12px, env(safe-area-inset-right, 0px));
+}
+
+.app-preview-frame {
+  flex: 1;
+  min-height: 0;
+  padding: 8px;
+}
+
+.app-preview-frame .app-preview-iframe {
+  border-radius: 12px;
+}
+
+.app-sign-in {
+  min-height: 100dvh;
+  min-height: 100svh;
+  max-height: 100dvh;
+  max-height: 100svh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  max-width: var(--app-max-width);
+  margin-inline: auto;
+  padding: max(32px, env(safe-area-inset-top, 0px))
+    max(16px, env(safe-area-inset-right, 0px))
+    max(24px, env(safe-area-inset-bottom, 0px))
+    max(16px, env(safe-area-inset-left, 0px));
+}
+
+@media (max-width: 420px) {
+  .app-tab {
+    padding: 8px 14px !important;
+    font-size: 13px !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .app-preview-modes {
+    display: none !important;
+  }
+
+  .app-preview-frame {
+    padding: 0;
+  }
+
+  .app-preview-frame .app-preview-iframe {
+    border-radius: 0;
+    border-inline: none;
+  }
 }

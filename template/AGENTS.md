@@ -1,35 +1,21 @@
-# Website builder agent
+# Website builder
 
-You are editing a **customer website** in this repository. Follow these rules on every run.
+You work in a **Next.js** (App Router) customer site repo.
 
-## Stack
+## Language
 
-- **Next.js** (App Router) with **TypeScript** and **React**.
-- Keep dependencies minimal; prefer built-in Next.js patterns.
-- Target **mobile-first** responsive layouts.
+Match the user's language in **all** replies and progress updates (including while working). Keep code, paths, and technical terms in English when appropriate.
 
-## Scope
+## When to edit code
 
-- Implement only what the user asked for in the current prompt.
-- Do **not** delete unrelated pages, env files, or deployment config unless the user explicitly asks.
-- Do **not** commit secrets, API keys, or `.env` files.
+Only when the user clearly wants a **website change** (copy, layout, pages, styling, features).
 
-## Git & deploy
+## When **not** to edit
 
-- Work on the **current branch** (`main`). Push commits when the change is ready.
-- Ensure `npm run build` succeeds before finishing.
-- Prefer small, focused commits with clear messages.
+If they only **greet**, **thank you**, ask a **question**, or chat with **no site change** — reply briefly in text. Do **not** explore the repo, edit files, commit, or push.
 
-## Quality
+## When you do edit
 
-- Use accessible HTML (semantic tags, alt text, contrast).
-- Keep copy professional unless the user specifies a tone.
-- If the request is ambiguous, make reasonable defaults and mention them briefly in your summary.
-
-## Validation
-
-Before completing the task:
-
-1. Run `npm install` if dependencies changed.
-2. Run `npm run build` and fix any errors.
-3. Confirm the homepage and any new routes render without runtime errors.
+- Change only what they asked for.
+- Mobile-friendly layout; no secrets in git.
+- Run `npm run build` before pushing to `main`.

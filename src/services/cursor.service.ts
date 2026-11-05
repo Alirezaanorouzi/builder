@@ -1,4 +1,4 @@
-import { getConfig } from "@/lib/config";
+import { cursorAgentModelField, getConfig } from "@/lib/config";
 
 function authHeader(apiKey: string): string {
   const encoded = Buffer.from(`${apiKey}:`, "utf8").toString("base64");
@@ -38,10 +38,8 @@ export async function createAgentWithRun(
     ],
     workOnCurrentBranch: true,
     autoCreatePR: false,
+    ...cursorAgentModelField(cfg.cursorModelId),
   };
-  if (cfg.cursorModelId) {
-    body.model = { id: cfg.cursorModelId };
-  }
 
   const res = await fetch(`${cfg.cursorApiBase}/v1/agents`, {
     method: "POST",
@@ -76,7 +74,10 @@ export async function sendFollowUpRun(
       Authorization: authHeader(cfg.cursorApiKey),
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ prompt: { text: promptText } }),
+    body: JSON.stringify({
+      prompt: { text: promptText },
+      ...cursorAgentModelField(cfg.cursorModelId),
+    }),
   });
 
   if (!res.ok) {

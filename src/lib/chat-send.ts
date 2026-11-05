@@ -13,13 +13,12 @@ import {
 } from "@/lib/site-runtime";
 import {
   createQueuedBuildRun,
-  appendBuildEvent,
 } from "@/lib/build-runs";
 import {
   ensureDefaultSite,
   getOrCreateChatSession,
 } from "@/lib/sites";
-import { processOneWorkerTick } from "@/lib/build-worker";
+import { kickInlineWorkerTick } from "@/lib/build-worker";
 
 export async function handleChatSend(
   req: NextRequest,
@@ -65,13 +64,7 @@ export async function handleChatSend(
       userMessage: message,
     });
 
-    await appendBuildEvent(buildRun.id, "status", {
-      message: "Build queued…",
-    });
-
-    if (process.env.INLINE_BUILD_WORKER === "1") {
-      void processOneWorkerTick();
-    }
+    kickInlineWorkerTick();
 
     return Response.json({
       siteId,

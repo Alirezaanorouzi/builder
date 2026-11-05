@@ -39,6 +39,7 @@ Open [http://localhost:3000](http://localhost:3000).
 | `VERCEL_TOKEN` | Vercel API token |
 | `VERCEL_PROJECT_ID` | Optional legacy single-project id; multi-tenant uses per-site projects |
 | `VERCEL_TEAM_ID` | Optional, if project is under a team |
+| `CURSOR_MODEL_ID` | Cloud Agent model (default `composer-2.5` **standard** via `fast=false` param; dashboard default does not apply to API) |
 
 Agent options used:
 
@@ -48,8 +49,8 @@ Agent options used:
 ## Flow
 
 1. User sends a message → `POST /api/chat/send` creates a **BuildRun** (`queued`) for the site (one active build per site).
-2. **Worker** (`npm run worker` or `INLINE_BUILD_WORKER=1`) claims the job, runs the coding engine, pushes git, waits for Vercel, writes **BuildEvent** rows.
-3. Client opens `GET /api/chat/stream?buildRunId=` → replays/tails events from Postgres (refresh-safe).
+2. **Worker** (`npm run worker` or `INLINE_BUILD_WORKER=1`) runs the job via **`@cursor/sdk`** Cloud Agents; live UI events come from the agent stream (in-memory SSE), not Postgres.
+3. Client opens `GET /api/chat/stream?buildRunId=` → subscribes to the live bus. Vercel deploys from the agent’s git push; preview URL is attached when detected (no fake “deploying” steps in chat).
 4. **SiteResources** stores `cursorAgentId` (and chat session mirrors it) for follow-up runs on the same site.
 
 Auth + sites use **PostgreSQL** (`DATABASE_URL`). See [docs/DATABASE.md](docs/DATABASE.md) (Liara, Docker, or Neon).
@@ -70,6 +71,8 @@ scripts/               — worker, prisma CLI, ops probes
 
 - **usage_limit_exceeded / 403** — Cloud Agents need a paid Cursor plan with usage available; see [pricing](https://www.cursor.com/pricing).
 - **Missing env** — Server returns 500 with a clear message.
-- **409 agent busy** — Wait for the current run to finish before sending again.
+- **409 agent busy** — Wait for the current run to finish, or send again after restart (stale runs are cleared). Use `INLINE_BUILD_WORKER=1` or `npm run worker`.
+- **Agent edits on “hi” / thanks** — User text is sent as-is (no app wrapper). Behavior comes from repo **`AGENTS.md`** (see `template/AGENTS.md`). Update that file in each customer GitHub repo (or re-provision from an updated template).
+- **Prisma P1001 / connection reset (Liara)** — Remote Postgres closed the connection. Confirm Liara is reachable; for local dev use `npm run db:up` and a local `DATABASE_URL`. Streaming events no longer hit Postgres; only **BuildRun** status rows are written.
 - **No preview URL** — Confirm Vercel is linked to the repo, deploy succeeded, and `VERCEL_PROJECT_ID` is correct. First deploy may take a few minutes after the agent pushes.
 - **Vercel: “Deployment was blocked … commit author did not have contributing access”** — On **Hobby**, **private** GitHub repos only deploy commits whose **author email matches the GitHub account linked to Vercel**. Ensure Cursor commits as that GitHub user; import the repo on **your** Vercel team, make the repo **public**, or upgrade to **Pro**.
