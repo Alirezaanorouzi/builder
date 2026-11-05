@@ -3,12 +3,14 @@
  */
 import { execSync } from "node:child_process";
 
+const schema = "src/lib/db/schema.prisma";
+
 function run(cmd) {
   execSync(cmd, { stdio: "inherit", env: process.env });
 }
 
 if (process.env.DATABASE_URL?.trim()) {
-  run("npx prisma migrate deploy --schema=src/prisma/schema.prisma");
+  run(`npx prisma migrate deploy --schema=${schema}`);
 }
-run("npx prisma generate --schema=src/prisma/schema.prisma");
+run(`npx prisma generate --schema=${schema}`);
 run("npx next build");

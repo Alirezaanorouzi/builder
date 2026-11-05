@@ -31,7 +31,7 @@ Build steps Liara runs:
 - `npm run build` → `scripts/build-production.mjs` (migrate if `DATABASE_URL`, then `next build`)
 - `npm start` → `next start`
 
-Prisma schema: **`src/prisma/schema.prisma`** (included in Next.js uploads).
+Prisma schema: **`src/lib/db/schema.prisma`** (inside `src/lib`, included in Liara Next.js uploads).
 
 ## 3. Manual deploy (CLI)
 
@@ -54,7 +54,7 @@ Separate **Node** Liara app: start command `npm run worker`, same DB and API env
 
 ## 5. Troubleshooting
 
-- **Build: Prisma schema not found** — schema must live under `src/prisma/` (already in this repo).
+- **Build: Prisma schema not found** — schema lives at `src/lib/db/schema.prisma`.
 - **Migrate fails** — set `DATABASE_URL` on the Liara app before deploy.
 - **npm mirror errors** — `mirror: false` in `liara.json`.
 

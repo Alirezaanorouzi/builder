@@ -6,11 +6,11 @@
     "node": ">=22"
   },
   "prisma": {
-    "schema": "src/prisma/schema.prisma"
+    "schema": "src/lib/db/schema.prisma"
   },
   "scripts": {
     "dev": "next dev",
-    "postinstall": "prisma generate --schema=src/prisma/schema.prisma",
+    "postinstall": "prisma generate",
     "build": "node scripts/build-production.mjs",
     "start": "next start",
     "lint": "next lint",

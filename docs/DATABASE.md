@@ -18,7 +18,7 @@ BETTER_AUTH_URL=https://your-app-domain
 
 ## Apply schema
 
-Schema lives at `src/prisma/schema.prisma` (included in Liara Next.js deploys).
+Schema lives at `src/lib/db/schema.prisma` (under `src/lib`, included in Liara Next.js deploys).
 
 First time (empty database):
 
