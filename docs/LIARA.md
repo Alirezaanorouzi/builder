@@ -33,6 +33,12 @@ Build steps Liara runs:
 
 Prisma schema lives at **`src/lib/db/schema.prisma`**. Liara’s Next.js packer drops `.prisma` files, so `scripts/prisma-postinstall.mjs` writes the schema from an embedded JS copy before `prisma generate`.
 
+Copy app secrets from `.env.local` onto Liara (skips `LIARA_*` CLI keys; rewrites localhost `BETTER_AUTH_URL` to `https://<app>.liara.run`):
+
+```bash
+npm run env:liara
+```
+
 ## 3. Manual deploy (CLI)
 
 For one-off deploys from your machine:
