@@ -1,16 +1,16 @@
 /**
- * Production build: run migrations when DATABASE_URL is set (Liara / CI), then Next.js.
+ * Production build: materialize Prisma files, migrate when DATABASE_URL is set, then Next.js.
  */
 import { execSync } from "node:child_process";
-
-const schema = "src/lib/db/schema.prisma";
 
 function run(cmd) {
   execSync(cmd, { stdio: "inherit", env: process.env });
 }
 
+run("node scripts/prisma-postinstall.mjs");
+
 if (process.env.DATABASE_URL?.trim()) {
-  run(`npx prisma migrate deploy --schema=${schema}`);
+  run("npx prisma migrate deploy --schema=src/lib/db/schema.prisma");
 }
-run(`npx prisma generate --schema=${schema}`);
+
 run("npx next build");

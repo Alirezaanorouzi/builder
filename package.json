@@ -10,7 +10,7 @@
   },
   "scripts": {
     "dev": "next dev",
-    "postinstall": "prisma generate",
+    "postinstall": "node scripts/prisma-postinstall.mjs",
     "build": "node scripts/build-production.mjs",
     "start": "next start",
     "lint": "next lint",
