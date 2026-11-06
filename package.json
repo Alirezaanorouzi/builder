@@ -11,7 +11,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "node build-production.mjs",
-    "start": "next start",
+    "start": "node start-production.mjs",
     "lint": "next lint",
     "worker": "tsx scripts/build-worker.ts",
     "deploy:liara": "node scripts/liara-deploy.mjs",

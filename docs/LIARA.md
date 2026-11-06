@@ -28,8 +28,8 @@ See [DATABASE.md](./DATABASE.md) and [PROVISIONING.md](./PROVISIONING.md).
 Build steps Liara runs:
 
 - `npm ci` — install only (no Prisma script; source may not be fully copied yet)
-- `npm run build` → root `build-production.mjs` → `prisma-postinstall.mjs` (write schema, generate client, migrate if `DATABASE_URL`) → `next build`
-- `npm start` → `next start`
+- `npm run build` → `build-production.mjs` → generate Prisma client → `next build` (no DB)
+- `npm start` → `start-production.mjs` → `prisma migrate deploy` (private DB is reachable) → `next start`
 
 Prisma schema lives at **`src/lib/db/schema.prisma`**. Liara’s Next packer can omit `.prisma` files; `prisma-postinstall.mjs` writes them from `prisma-assets.mjs` during **build**, not `postinstall`.
 
@@ -61,7 +61,7 @@ Separate **Node** Liara app: start command `npm run worker`, same DB and API env
 ## 5. Troubleshooting
 
 - **Build: Prisma schema not found during `npm ci`** — do not run Prisma in `postinstall`. Generation happens in `npm run build`.
-- **Migrate fails** — set `DATABASE_URL` on the Liara app before deploy.
+- **Migrate P1001 during build** — expected if Postgres is private. Migrations run on **start**, not build. Use the **private** `DATABASE_URL` on the Liara app.
 - **npm mirror errors** — `mirror: false` in `liara.json`.
 
 Docs: [Liara Next.js](https://docs.liara.ir/paas/nextjs/how-tos/deploy-app/)

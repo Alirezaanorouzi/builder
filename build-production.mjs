@@ -1,5 +1,6 @@
 /**
- * Production build: materialize Prisma files, migrate when DATABASE_URL is set, then Next.js.
+ * Production build. Do not migrate here: Liara's Docker build network
+ * cannot reach a private (or firewalled public) Postgres. Migrate on start.
  */
 import { execSync } from "node:child_process";
 
@@ -8,9 +9,4 @@ function run(cmd) {
 }
 
 run("node prisma-postinstall.mjs");
-
-if (process.env.DATABASE_URL?.trim()) {
-  run("npx prisma migrate deploy --schema=src/lib/db/schema.prisma");
-}
-
 run("npx next build");
