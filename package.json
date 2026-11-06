@@ -10,7 +10,6 @@
   },
   "scripts": {
     "dev": "next dev",
-    "postinstall": "node prisma-postinstall.mjs",
     "build": "node build-production.mjs",
     "start": "next start",
     "lint": "next lint",

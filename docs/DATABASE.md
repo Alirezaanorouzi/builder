@@ -18,7 +18,7 @@ BETTER_AUTH_URL=https://your-app-domain
 
 ## Apply schema
 
-Schema lives at `src/lib/db/schema.prisma`. On Liara Next.js, `.prisma` files are not uploaded; `scripts/prisma-postinstall.mjs` writes them from `scripts/prisma-assets.mjs` during install.
+Schema lives at `src/lib/db/schema.prisma`. On Liara Next.js, Prisma runs in `npm run build` (`build-production.mjs`), not `postinstall`.
 
 First time (empty database):
 
