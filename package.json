@@ -10,8 +10,8 @@
   },
   "scripts": {
     "dev": "next dev",
-    "postinstall": "node scripts/prisma-postinstall.mjs",
-    "build": "node scripts/build-production.mjs",
+    "postinstall": "node prisma-postinstall.mjs",
+    "build": "node build-production.mjs",
     "start": "next start",
     "lint": "next lint",
     "worker": "tsx scripts/build-worker.ts",

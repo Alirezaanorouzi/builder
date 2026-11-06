@@ -11,9 +11,9 @@ for (const name of readdirSync(join(root, "migrations"))) {
   migrations[name] = readFileSync(join(root, "migrations", name, "migration.sql"), "utf8");
 }
 writeFileSync(
-  "scripts/prisma-assets.mjs",
+  "prisma-assets.mjs",
   `export const prismaSchema = ${JSON.stringify(schema)};\n` +
     `export const migrationLock = ${JSON.stringify(lock)};\n` +
     `export const migrations = ${JSON.stringify(migrations)};\n`
 );
-console.log("Updated scripts/prisma-assets.mjs");
+console.log("Updated prisma-assets.mjs");

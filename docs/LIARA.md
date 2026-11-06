@@ -60,7 +60,7 @@ Separate **Node** Liara app: start command `npm run worker`, same DB and API env
 
 ## 5. Troubleshooting
 
-- **Build: Prisma schema not found** — Liara Next.js omits `.prisma` files; `postinstall` recreates them from `scripts/prisma-assets.mjs`.
+- **Build: Prisma schema not found** — Liara Next.js omits `.prisma` and often `scripts/`. Root `prisma-postinstall.mjs` writes the schema from `prisma-assets.mjs` during `postinstall`.
 - **Migrate fails** — set `DATABASE_URL` on the Liara app before deploy.
 - **npm mirror errors** — `mirror: false` in `liara.json`.
 
