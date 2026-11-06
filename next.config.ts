@@ -5,12 +5,11 @@ const nextConfig: NextConfig = {
   output: "standalone",
   outputFileTracingRoot: path.join(process.cwd()),
   serverExternalPackages: ["@cursor/sdk"],
-  webpack: (config, { webpack }) => {
-    config.plugins.push(
-      new webpack.IgnorePlugin({
-        resourceRegExp: /\.d\.ts\.map$/,
-      })
-    );
+  webpack: (config) => {
+    config.module.rules.unshift({
+      test: /\.d\.ts\.map$/,
+      type: "json",
+    });
     return config;
   },
 };

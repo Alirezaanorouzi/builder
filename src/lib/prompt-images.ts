@@ -1,4 +1,4 @@
-import type { SDKImage } from "@cursor/sdk";
+import type { EnginePromptImage } from "@engines/types";
 
 /** Cursor Cloud Agents: max 5 images, 15 MB each (API v1). */
 export const MAX_PROMPT_IMAGES = 5;
@@ -114,10 +114,10 @@ export function parsePromptImagesFromClient(raw: unknown): StoredPromptImage[] {
   return out;
 }
 
-export function storedImagesToSdk(images: StoredPromptImage[] | null | undefined): SDKImage[] {
+export function storedImagesToSdk(images: StoredPromptImage[] | null | undefined): EnginePromptImage[] {
   if (!images?.length) return [];
   return images.map((img) => {
-    const base: SDKImage = { data: img.data, mimeType: img.mimeType };
+    const base: EnginePromptImage = { data: img.data, mimeType: img.mimeType };
     if (img.dimension) {
       return { ...base, dimension: img.dimension };
     }

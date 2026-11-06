@@ -1,5 +1,3 @@
-import { assertCursorConfig } from "@engines/cursor/provider";
-
 export type CodingEngineId = "cursor";
 
 /** Default Cloud Agent model when `CURSOR_MODEL_ID` is unset. */
@@ -137,12 +135,7 @@ export function assertServerConfig() {
   const missing: string[] = [];
 
   if (!c.vercelToken) missing.push("VERCEL_TOKEN");
-
-  try {
-    assertCursorConfig();
-  } catch (e) {
-    missing.push(e instanceof Error ? e.message : "CURSOR_API_KEY");
-  }
+  if (!c.cursorApiKey) missing.push("CURSOR_API_KEY");
 
   if (missing.length) {
     throw new Error(`Missing env: ${missing.join(", ")}. Copy .env.example to .env.local`);

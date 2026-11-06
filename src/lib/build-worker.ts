@@ -1,5 +1,4 @@
 import { prisma } from "@/lib/db";
-import { executeBuildRun } from "@/services/build-orchestrator";
 import { processOneProvisioningJob } from "@/services/provisioning.service";
 import { getWorkerConfig } from "@/lib/worker-config";
 import { reconcileStaleActiveBuildsForSite } from "@/lib/build-runs";
@@ -29,6 +28,7 @@ export async function claimNextQueuedBuildRun(): Promise<BuildRun | null> {
 export async function processOneBuildJob(): Promise<boolean> {
   const claimed = await claimNextQueuedBuildRun();
   if (!claimed) return false;
+  const { executeBuildRun } = await import("@/services/build-orchestrator");
   await executeBuildRun(claimed.id);
   return true;
 }

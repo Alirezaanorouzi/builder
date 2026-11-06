@@ -94,10 +94,3 @@ export const cursorEngineProvider: CodingEngineProvider = {
     }
   },
 };
-
-export function assertCursorConfig() {
-  const c = getConfig();
-  if (!c.cursorApiKey) {
-    throw new Error("Missing CURSOR_API_KEY");
-  }
-}

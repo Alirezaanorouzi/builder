@@ -2,9 +2,14 @@
  * Shared contract for the Cursor Cloud Agents coding backend.
  */
 
-import type { SDKImage } from "@cursor/sdk";
-
 export type CodingEngineId = "cursor";
+
+/** Cursor Cloud Agent image payload (kept local so Next.js does not bundle @cursor/sdk). */
+export type EnginePromptImage = {
+  data: string;
+  mimeType: string;
+  dimension?: { width: number; height: number };
+};
 
 export interface TenantContext {
   siteId: string;
@@ -20,7 +25,7 @@ export interface TenantContext {
 
 export interface StartRunInput {
   promptText: string;
-  promptImages?: SDKImage[];
+  promptImages?: EnginePromptImage[];
   agentId: string | null;
   tenant: TenantContext;
 }
