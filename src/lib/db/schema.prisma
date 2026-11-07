@@ -218,6 +218,8 @@ model BuildRun {
 
 model BuildEvent {
   id         String   @id @default(cuid())
+  /** Monotonic cursor for SSE tailing across processes (worker writes, API reads). */
+  seq        BigInt   @default(autoincrement())
   buildRunId String
   buildRun   BuildRun @relation(fields: [buildRunId], references: [id], onDelete: Cascade)
   eventType  String
@@ -226,4 +228,6 @@ model BuildEvent {
   createdAt  DateTime @default(now())
 
   @@index([buildRunId, createdAt])
+  @@index([buildRunId, seq])
+  @@index([createdAt])
 }

@@ -28,11 +28,10 @@ function liara(args) {
   });
 }
 
-const required = [
+const requiredBase = [
   "DATABASE_URL",
   "BETTER_AUTH_SECRET",
   "BETTER_AUTH_URL",
-  "CURSOR_API_KEY",
   "TEMPLATE_REPO_URL",
   "TEMPLATE_REPO_REF",
   "PLATFORM_GITHUB_TOKEN",
@@ -141,6 +140,12 @@ function summarize(key, value) {
   if (key === "INLINE_BUILD_WORKER") {
     info.value = v;
   }
+  if (key === "CURSOR_TRANSPORT") {
+    info.value = v || "(unset = direct)";
+  }
+  if (key === "ENGINE_GATEWAY_URL") {
+    info.host = v.replace(/^https?:\/\//, "").split("/")[0] || "(empty)";
+  }
   return info;
 }
 
@@ -155,6 +160,13 @@ if (map.size === 0) {
 
 console.log("");
 console.log("=== Required for this builder ===");
+const transport = ((map.get("CURSOR_TRANSPORT") || "").trim().toLowerCase() || "direct");
+const cursorRequired =
+  transport === "gateway"
+    ? ["CURSOR_TRANSPORT", "ENGINE_GATEWAY_URL", "ENGINE_GATEWAY_TOKEN"]
+    : ["CURSOR_API_KEY"];
+
+const required = [...requiredBase, ...cursorRequired];
 const missing = [];
 for (const key of required) {
   const ok = map.has(key) && (map.get(key) || "").trim().length > 0;

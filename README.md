@@ -29,11 +29,20 @@ npm run worker
 
 Open [http://localhost:3000](http://localhost:3000).
 
+## Agent gateway (region-blocked hosts)
+
+If the server egress is blocked by Cursor (“not available in your region”), deploy [`gateway/`](gateway/) to **Vercel** in an allowed region (see `gateway/vercel.json`). The gateway holds `CURSOR_API_KEY`; the builder uses **`CURSOR_TRANSPORT=gateway`**, **`ENGINE_GATEWAY_URL`** (project origin, no path), and **`ENGINE_GATEWAY_TOKEN`** (same value as on Vercel). Then **remove `CURSOR_API_KEY` from Liara** so the key never transits the blocked region.
+
+Test connectivity: `npx tsx scripts/probe-gateway.ts`
+
 ## Environment variables
 
 | Variable | Description |
 |----------|-------------|
-| `CURSOR_API_KEY` | Cursor API key |
+| `CURSOR_TRANSPORT` | `direct` (default) or `gateway` |
+| `CURSOR_API_KEY` | Cursor API key (`direct` only; optional on builder when using gateway) |
+| `ENGINE_GATEWAY_URL` | Vercel gateway origin, e.g. `https://your-app.vercel.app` (`gateway` only) |
+| `ENGINE_GATEWAY_TOKEN` | Shared secret with the gateway (`gateway` only) |
 | `TEMPLATE_REPO_URL` | e.g. `https://github.com/you/clinic-template` |
 | `TEMPLATE_REPO_REF` | Branch agent pushes to (default `main`) — must match Vercel production branch |
 | `VERCEL_TOKEN` | Vercel API token |
@@ -49,9 +58,12 @@ Agent options used:
 ## Flow
 
 1. User sends a message → `POST /api/chat/send` creates a **BuildRun** (`queued`) for the site (one active build per site).
-2. **Worker** (`npm run worker` or `INLINE_BUILD_WORKER=1`) runs the job via **`@cursor/sdk`** Cloud Agents; live UI events come from the agent stream (in-memory SSE), not Postgres.
-3. Client opens `GET /api/chat/stream?buildRunId=` → subscribes to the live bus. Vercel deploys from the agent’s git push; preview URL is attached when detected (no fake “deploying” steps in chat).
-4. **SiteResources** stores `cursorAgentId` (and chat session mirrors it) for follow-up runs on the same site.
+2. **Worker** (`npm run worker` or `INLINE_BUILD_WORKER=1`) runs the job via **`@cursor/sdk`** (direct) or a **REST + SSE** path (`CURSOR_TRANSPORT=gateway`); live UI events are written to the **`BuildEvent`** table in Postgres (pruned after 7 days). Because events live in the database, the worker can run in a separate process/app without breaking the live UI.
+3. Client opens `GET /api/chat/stream?buildRunId=` → the route tails `BuildEvent` rows (resumable with `Last-Event-ID`). After the agent finishes, the run moves through `pushing` → `deploying` and only becomes `succeeded` once Vercel reports a **READY** deployment of the pushed commit; only then does the preview unlock.
+4. **SiteResources** stores `cursorAgentId` (single source of truth) for follow-up runs on the same site.
+5. **Recovery:** the worker heartbeats its run every 15s. If it dies, another worker (or the restarted one) re-attaches to the Cursor run by `engineRunId`, or re-queues the run if the agent had not started yet. Runs never exceed `BUILD_RUN_MAX_MINUTES` (default 45).
+
+Existing sites created before the preview gate can be backfilled once with `npm run backfill:preview-gate` (`/api/me` no longer calls GitHub/Vercel).
 
 Auth + sites use **PostgreSQL** (`DATABASE_URL`). See [docs/DATABASE.md](docs/DATABASE.md) (Liara, Docker, or Neon).
 
@@ -63,7 +75,8 @@ Auth + sites use **PostgreSQL** (`DATABASE_URL`). See [docs/DATABASE.md](docs/DA
 src/app/api/           — thin HTTP routes
 src/lib/               — auth, db, access, build queue, worker loop, chat-send
 src/services/          — GitHub, Vercel, Cursor, provisioning, build orchestrator
-engines/cursor/        — Cursor engine adapter (SSE → build events)
+engines/cursor/        — Cursor engine adapters (SDK + REST gateway)
+gateway/               — optional Vercel proxy for Cursor API (region bypass)
 src/components/Chat.tsx
 template/              — GitHub template (AGENTS.md + .cursor/environment.json)
 scripts/               — worker, prisma CLI, ops probes
@@ -75,6 +88,6 @@ scripts/               — worker, prisma CLI, ops probes
 - **Missing env** — Server returns 500 with a clear message.
 - **409 agent busy** — Wait for the current run to finish, or send again after restart (stale runs are cleared). Use `INLINE_BUILD_WORKER=1` or `npm run worker`.
 - **Agent edits on “hi” / thanks** — User text is sent as-is (no app wrapper). Behavior comes from repo **`AGENTS.md`** (see `template/AGENTS.md`). Update that file in each customer GitHub repo (or re-provision from an updated template).
-- **Prisma P1001 / connection reset (Liara)** — Remote Postgres closed the connection. Confirm Liara is reachable; for local dev use `npm run db:up` and a local `DATABASE_URL`. Streaming events no longer hit Postgres; only **BuildRun** status rows are written.
+- **Prisma P1001 / connection reset (Liara)** — Remote Postgres closed the connection. Confirm Liara is reachable; for local dev use `npm run db:up` and a local `DATABASE_URL`. Live events are written to Postgres (`BuildEvent`), so DB outages stall the live UI.
 - **No preview URL** — Confirm Vercel is linked to the repo, deploy succeeded, and `VERCEL_PROJECT_ID` is correct. First deploy may take a few minutes after the agent pushes.
 - **Vercel: “Deployment was blocked … commit author did not have contributing access”** — On **Hobby**, **private** GitHub repos only deploy commits whose **author email matches the GitHub account linked to Vercel**. Ensure Cursor commits as that GitHub user; import the repo on **your** Vercel team, make the repo **public**, or upgrade to **Pro**.

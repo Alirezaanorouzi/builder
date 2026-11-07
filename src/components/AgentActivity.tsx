@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { CSSProperties } from "react";
 import {
   collapsedActivityLabel,
   formatElapsedSeconds,
@@ -9,6 +8,7 @@ import {
   type AgentActivitySnapshot,
 } from "@/lib/agent-activity";
 import { ChevronExpand } from "@/components/chat/ChevronExpand";
+import styles from "./agent-activity.module.css";
 
 type Props = {
   snapshot: AgentActivitySnapshot;
@@ -34,131 +34,69 @@ export function AgentActivity({ snapshot, onToggleExpanded }: Props) {
     snapshot.phase === "working" ? true : snapshot.expanded;
   const canToggle = snapshot.phase !== "working";
 
+  const statusDotClass = [
+    styles.statusDot,
+    snapshot.phase === "working" && styles.statusWorking,
+    snapshot.phase === "completed" && styles.statusDone,
+    snapshot.phase === "failed" && styles.statusFailed,
+    snapshot.phase === "cancelled" && styles.statusCancelled,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <div style={styles.wrap}>
+    <div className={styles.wrap}>
       {canToggle ? (
         <button
           type="button"
-          style={styles.header}
+          className={styles.header}
           onClick={onToggleExpanded}
           aria-expanded={snapshot.expanded}
         >
-          <span
-            style={{
-              ...styles.statusDot,
-              ...(snapshot.phase === "working" ? styles.statusWorking : {}),
-              ...(snapshot.phase === "completed" ? styles.statusDone : {}),
-              ...(snapshot.phase === "failed" ? styles.statusFailed : {}),
-              ...(snapshot.phase === "cancelled" ? styles.statusCancelled : {}),
-            }}
-          />
-          <span style={styles.titleRow}>
-            <span style={styles.headerLabel}>{label}</span>
+          <span className={statusDotClass} />
+          <span className={styles.titleRow}>
+            <span className={styles.headerLabel}>{label}</span>
             <ChevronExpand expanded={snapshot.expanded} />
           </span>
         </button>
       ) : (
-        <div style={styles.headerStatic} aria-live="polite">
-          <span
-            style={{
-              ...styles.statusDot,
-              ...(snapshot.phase === "working" ? styles.statusWorking : {}),
-            }}
-          />
-          <span style={styles.headerLabel}>{label}</span>
-          {elapsed && <span style={styles.elapsed}>{elapsed}</span>}
+        <div className={styles.headerStatic} aria-live="polite">
+          <span className={statusDotClass} />
+          <span className={styles.headerLabel}>{label}</span>
+          {elapsed && <span className={styles.elapsed}>{elapsed}</span>}
         </div>
       )}
 
       {showTimeline && (
-        <div style={styles.body}>
+        <div className={styles.body}>
           {displayTimeline.length === 0 && snapshot.phase === "working" && (
-            <p style={styles.empty}>
+            <p className={styles.empty}>
               {snapshot.receivedAssistant
                 ? "پاسخ داده شد — در حال اتمام…"
                 : "در انتظار فعالیت عامل…"}
             </p>
           )}
-          <ul style={styles.list}>
-            {displayTimeline.map((entry) => (
-              <li key={entry.eventId} style={styles.listItem}>
-                <span>{entry.label}</span>
-              </li>
-            ))}
+          <ul className={styles.timeline}>
+            {displayTimeline.map((entry, index) => {
+              const isLast = index === displayTimeline.length - 1;
+              const isActive =
+                snapshot.phase === "working" && isLast;
+              return (
+                <li key={entry.eventId} className={styles.timelineItem}>
+                  <span
+                    className={`${styles.timelineDot}${isActive ? ` ${styles.timelineDotActive}` : ""}`}
+                    aria-hidden
+                  />
+                  <span className={styles.timelineLabel}>{entry.label}</span>
+                </li>
+              );
+            })}
           </ul>
           {snapshot.errorMessage && snapshot.phase === "failed" && (
-            <p style={styles.errorDetail}>{snapshot.errorMessage}</p>
+            <p className={styles.errorDetail}>{snapshot.errorMessage}</p>
           )}
         </div>
       )}
     </div>
   );
 }
-
-const styles: Record<string, CSSProperties> = {
-  wrap: {
-    alignSelf: "stretch",
-    padding: 0,
-  },
-  header: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    width: "100%",
-    padding: "2px 0",
-    border: "none",
-    background: "transparent",
-    color: "var(--muted)",
-    fontSize: 13,
-    cursor: "pointer",
-    textAlign: "start",
-    justifyContent: "flex-start",
-  },
-  headerStatic: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    padding: "2px 0",
-    color: "var(--muted)",
-    fontSize: 13,
-  },
-  statusDot: {
-    width: 6,
-    height: 6,
-    borderRadius: "50%",
-    background: "var(--muted)",
-    flexShrink: 0,
-  },
-  statusWorking: { background: "var(--accent)" },
-  statusDone: { background: "var(--success)" },
-  statusFailed: { background: "#c75b5b" },
-  statusCancelled: { background: "var(--muted)" },
-  titleRow: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 6,
-    minWidth: 0,
-  },
-  headerLabel: { fontWeight: 500, color: "var(--muted)", textAlign: "start" },
-  elapsed: { color: "var(--muted)", fontSize: 12, opacity: 0.85 },
-  body: {
-    padding: "4px 0 8px 14px",
-    borderInlineStart: "1px solid var(--border)",
-    marginTop: 4,
-    marginBottom: 4,
-  },
-  empty: { margin: "0 0 6px", color: "var(--muted)", fontSize: 13 },
-  list: { margin: 0, padding: 0, listStyle: "none" },
-  listItem: {
-    fontSize: 13,
-    color: "var(--muted)",
-    lineHeight: 1.5,
-    marginBottom: 4,
-  },
-  errorDetail: {
-    margin: "8px 0 0",
-    fontSize: 13,
-    color: "#ffb4b4",
-    lineHeight: 1.45,
-  },
-};

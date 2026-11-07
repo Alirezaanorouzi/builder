@@ -4,6 +4,12 @@ Each **Site** gets its own GitHub repository and Vercel project. Provisioning is
 
 **Scalability:** You maintain **one** template repo (`TEMPLATE_REPO_URL`). Every new user/site calls GitHub’s [generate from template](https://docs.github.com/rest/repos/repos#create-a-repository-using-a-template) API to create a **new** repo under your org/user (`GITHUB_REPO_OWNER`). That pattern scales to many customers; a 404 is almost always token or template settings—not “one repo per user” failing by design.
 
+## Liara egress
+
+Provisioning calls **`api.github.com`** and **`api.vercel.com`** from the app process. Liara (Iran) can hit **connect timeouts** to Vercel even when `/api/health` sometimes succeeds. Logs show `UND_ERR_CONNECT_TIMEOUT` → site goes **`failed`** with `provisioningError`.
+
+Mitigations today: longer retries in `platform-fetch.ts`. If timeouts persist, run a **Vercel API proxy** in an allowed region (same pattern as the Cursor gateway) or run `npm run worker` outside Liara.
+
 ## Prerequisites (manual)
 
 1. **GitHub template** — The repo in `TEMPLATE_REPO_URL` (e.g. `builder-clinic-template`) must have **Template repository** enabled in GitHub Settings (`is_template: true`). The Generate from Template API fails otherwise.

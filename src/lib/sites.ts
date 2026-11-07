@@ -164,10 +164,3 @@ export async function setSiteCursorAgentId(
     },
   });
 }
-
-export async function setChatSessionEngineAgentId(chatSessionId: string, engineAgentId: string) {
-  return prisma.chatSession.update({
-    where: { id: chatSessionId },
-    data: { engineAgentId, updatedAt: new Date() },
-  });
-}

@@ -8,10 +8,20 @@ import {
 import { prisma } from "@/lib/db";
 import { withDbRetry } from "@/lib/db";
 import { TERMINAL_BUILD_STATUSES } from "@/lib/build-runs";
-import { buildStreamBus, streamEventToSse } from "@/lib/build-stream-bus";
+import { readBuildEventsAfter, streamEventToSse } from "@/lib/build-stream-bus";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+/** How often the route checks Postgres for new `BuildEvent` rows. */
+const TAIL_INTERVAL_MS = 1000;
+/** Keep-alive comment so proxies do not close an idle stream. */
+const PING_INTERVAL_MS = 15_000;
+/**
+ * If the run is terminal but no `done` event ever shows up (worker died right after finishing),
+ * synthesize one after this grace period.
+ */
+const TERMINAL_GRACE_MS = 4000;
 
 function sseEncode(event: string, data: unknown, id?: string): string {
   let chunk = "";
@@ -19,6 +29,12 @@ function sseEncode(event: string, data: unknown, id?: string): string {
   chunk += `event: ${event}\n`;
   chunk += `data: ${JSON.stringify(data)}\n\n`;
   return chunk;
+}
+
+function parseLastSeq(req: NextRequest): bigint {
+  const raw =
+    req.headers.get("last-event-id") ?? req.nextUrl.searchParams.get("lastEventId") ?? "";
+  return /^\d+$/.test(raw) ? BigInt(raw) : BigInt(0);
 }
 
 export async function GET(req: NextRequest) {
@@ -38,15 +54,23 @@ export async function GET(req: NextRequest) {
     const user = await requireSessionUser();
     await assertBuildRunAccess(user.id, buildRunId);
 
-    let unsubscribe = () => {};
-    let pollTimer: ReturnType<typeof setInterval> | undefined;
-    let doneSent = false;
+    let tailTimer: ReturnType<typeof setTimeout> | undefined;
+    let pingTimer: ReturnType<typeof setInterval> | undefined;
+    let closed = false;
+    let lastSeq = parseLastSeq(req);
 
     const stream = new ReadableStream({
       start(controller) {
         const encoder = new TextEncoder();
+
+        const cleanup = () => {
+          closed = true;
+          if (tailTimer) clearTimeout(tailTimer);
+          if (pingTimer) clearInterval(pingTimer);
+        };
+
         const push = (sseEvent: string, data: Record<string, unknown>, id?: string) => {
-          if (doneSent) return;
+          if (closed) return;
           try {
             controller.enqueue(encoder.encode(sseEncode(sseEvent, data, id)));
           } catch {
@@ -55,31 +79,47 @@ export async function GET(req: NextRequest) {
         };
 
         const finish = (reason?: string) => {
-          if (doneSent) return;
-          doneSent = true;
+          if (closed) return;
           if (reason) {
             push("error", { eventId: `close-${Date.now()}`, message: reason });
           }
-          unsubscribe();
-          if (pollTimer) clearInterval(pollTimer);
+          cleanup();
           try {
             controller.close();
           } catch {
             /* already closed */
           }
-          setTimeout(() => buildStreamBus.drop(buildRunId), 10_000);
         };
 
-        unsubscribe = buildStreamBus.subscribe(buildRunId, (ev) => {
-          const { sseEvent, data } = streamEventToSse(ev);
-          push(sseEvent, data, String(data.eventId ?? ev.id));
-          if (ev.type === "done") finish();
-        });
+        pingTimer = setInterval(() => {
+          if (closed) return;
+          try {
+            controller.enqueue(encoder.encode(": ping\n\n"));
+          } catch {
+            finish();
+          }
+        }, PING_INTERVAL_MS);
 
-        pollTimer = setInterval(() => {
-          void (async () => {
-            if (doneSent) return;
-            try {
+        let terminalSeenAt: number | null = null;
+
+        const tick = async () => {
+          if (closed) return;
+          try {
+            const { events, lastSeq: nextSeq } = await withDbRetry(() =>
+              readBuildEventsAfter(buildRunId, lastSeq)
+            );
+            lastSeq = nextSeq;
+
+            for (const ev of events) {
+              const { sseEvent, data } = streamEventToSse(ev);
+              push(sseEvent, data, ev.id);
+              if (ev.type === "done") {
+                finish();
+                return;
+              }
+            }
+
+            if (events.length === 0) {
               const run = await withDbRetry(() =>
                 prisma.buildRun.findUnique({ where: { id: buildRunId } })
               );
@@ -88,32 +128,44 @@ export async function GET(req: NextRequest) {
                 return;
               }
               if (TERMINAL_BUILD_STATUSES.includes(run.status)) {
-                push(
-                  "done",
-                  {
-                    eventId: `run-terminal-${run.id}`,
-                    status: run.status,
-                    errorMessage: run.errorMessage ?? undefined,
-                    startedAt: run.startedAt?.toISOString(),
-                    finishedAt: (run.finishedAt ?? new Date()).toISOString(),
-                  },
-                  `run-terminal-${run.id}`
-                );
-                finish();
+                terminalSeenAt ??= Date.now();
+                if (Date.now() - terminalSeenAt >= TERMINAL_GRACE_MS) {
+                  push(
+                    "done",
+                    {
+                      eventId: `run-terminal-${run.id}`,
+                      status: run.status,
+                      errorMessage: run.errorMessage ?? undefined,
+                      startedAt: run.startedAt?.toISOString(),
+                      finishedAt: (run.finishedAt ?? new Date()).toISOString(),
+                    },
+                    `run-terminal-${run.id}`
+                  );
+                  finish();
+                  return;
+                }
               }
-            } catch (e) {
-              if (doneSent) return;
-              push("error", {
-                eventId: `poll-${Date.now()}`,
-                message: e instanceof Error ? e.message : "Stream poll error",
-              });
+            } else {
+              terminalSeenAt = null;
             }
-          })();
-        }, 2000);
+          } catch (e) {
+            if (closed) return;
+            push("error", {
+              eventId: `tail-${Date.now()}`,
+              message: e instanceof Error ? e.message : "Stream error",
+            });
+            finish();
+            return;
+          }
+          if (!closed) tailTimer = setTimeout(() => void tick(), TAIL_INTERVAL_MS);
+        };
+
+        void tick();
       },
       cancel() {
-        unsubscribe();
-        if (pollTimer) clearInterval(pollTimer);
+        closed = true;
+        if (tailTimer) clearTimeout(tailTimer);
+        if (pingTimer) clearInterval(pingTimer);
       },
     });
 
@@ -122,6 +174,7 @@ export async function GET(req: NextRequest) {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache, no-transform",
         Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
       },
     });
   } catch (e) {

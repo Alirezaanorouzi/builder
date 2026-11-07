@@ -1,7 +1,10 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useState } from "react";
 import styles from "./space-waiting.module.css";
+
+const PREVIEW_IMAGE = "/waiting/build-waiting.png";
 
 export type SpaceWaitingVariant = "setup" | "preview";
 
@@ -38,10 +41,10 @@ export function SpaceWaitingView({
     return () => window.clearInterval(id);
   }, [startedAtMs]);
 
-  const isSetup = variant === "setup";
-  const rootClass = isSetup
-    ? `${styles.root} ${styles.rootSetup}`
-    : `${styles.root} ${styles.rootPreview}`;
+  const isPreview = variant === "preview";
+  const rootClass = isPreview
+    ? `${styles.root} ${styles.rootPreview}`
+    : `${styles.root} ${styles.rootSetup}`;
 
   return (
     <div
@@ -51,32 +54,22 @@ export function SpaceWaitingView({
       aria-busy="true"
       aria-label={message}
     >
-      {isSetup ? (
-        <>
-          <div className={styles.sky} aria-hidden>
-            <div className={styles.stars} />
-            <div className={styles.glow} />
-          </div>
-          <div className={styles.stage} aria-hidden>
-            <div className={styles.orbitOuter}>
-              <span className={styles.satellite} />
-            </div>
-            <div className={styles.orbitInner} />
-            <div className={styles.core} />
-          </div>
-        </>
-      ) : (
-        <div className={styles.warpField} aria-hidden>
-          <div className={styles.warpVignette} />
-          <div className={styles.warpStreaks} />
-          <div className={`${styles.warpLayer} ${styles.warpLayerA}`} />
-          <div className={`${styles.warpLayer} ${styles.warpLayerB}`} />
-          <div className={`${styles.warpLayer} ${styles.warpLayerC}`} />
-          <div className={styles.infinityPoint} />
+      {isPreview && (
+        <div className={styles.backdrop} aria-hidden>
+          <Image
+            src={PREVIEW_IMAGE}
+            alt=""
+            fill
+            priority
+            sizes="100vw"
+            className={`${styles.backdropImage} ${styles.backdropImagePreview}`}
+          />
+          <div className={`${styles.backdropScrim} ${styles.backdropScrimPreview}`} />
+          <div className={styles.lightBloom} />
         </div>
       )}
 
-      <div className={isSetup ? styles.copy : `${styles.copy} ${styles.copyWarp}`}>
+      <div className={isPreview ? `${styles.copy} ${styles.copyPreview}` : `${styles.copy} ${styles.copySetup}`}>
         <p className={styles.message}>{message}</p>
         {startedAtMs != null && (
           <p className={styles.elapsed}>{formatElapsedPersian(elapsedMs)}</p>

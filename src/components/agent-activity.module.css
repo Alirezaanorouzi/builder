@@ -1,0 +1,149 @@
+.wrap {
+  align-self: stretch;
+  padding: 0;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 2px 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: start;
+  justify-content: flex-start;
+}
+
+.headerStatic {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.statusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex-shrink: 0;
+}
+
+.statusWorking {
+  background: var(--accent);
+}
+
+.statusDone {
+  background: var(--success);
+}
+
+.statusFailed {
+  background: #c75b5b;
+}
+
+.statusCancelled {
+  background: var(--muted);
+}
+
+.titleRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.headerLabel {
+  font-weight: 500;
+  color: var(--muted);
+  text-align: start;
+}
+
+.elapsed {
+  color: var(--muted);
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.body {
+  padding: 8px 0 10px 4px;
+  margin-top: 4px;
+  margin-bottom: 4;
+}
+
+.empty {
+  margin: 0 0 8px;
+  padding-inline-start: 22px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.timeline {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.timelineItem {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding-bottom: 10px;
+  min-height: 22px;
+}
+
+.timelineItem:last-child {
+  padding-bottom: 0;
+}
+
+/* Vertical rail between hollow nodes */
+.timelineItem:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 5px;
+  top: 12px;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.timelineDot {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  width: 11px;
+  height: 11px;
+  margin-top: 2px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(180, 210, 255, 0.55);
+  background: transparent;
+  box-sizing: border-box;
+}
+
+.timelineDotActive {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(99, 140, 255, 0.2);
+}
+
+.timelineLabel {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: rgba(200, 225, 255, 0.88);
+  text-align: start;
+}
+
+.errorDetail {
+  margin: 8px 0 0;
+  padding-inline-start: 22px;
+  font-size: 13px;
+  color: #ffb4b4;
+  line-height: 1.45;
+}

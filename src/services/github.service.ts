@@ -1,4 +1,5 @@
 import { assertPlatformProvisioningConfig, getPlatformConfig } from "@/lib/config";
+import { platformFetch } from "@/lib/platform-fetch";
 
 export interface CreatedGitHubRepo {
   id: number;
@@ -18,7 +19,7 @@ async function githubApi(
   init?: RequestInit
 ): Promise<Response> {
   const platform = getPlatformConfig();
-  return fetch(`https://api.github.com${path}`, {
+  return platformFetch(`https://api.github.com${path}`, {
     ...init,
     headers: {
       Authorization: `Bearer ${platform.githubToken}`,

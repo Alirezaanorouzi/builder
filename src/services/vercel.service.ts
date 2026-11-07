@@ -1,5 +1,6 @@
 import { assertPlatformProvisioningConfig, getConfig } from "@/lib/config";
-import { VERCEL_DEPLOY_POLL_INTERVAL_MS, VERCEL_DEPLOY_POLL_MAX_ATTEMPTS } from "@/lib/vercel-deploy-poll";
+import { platformFetch } from "@/lib/platform-fetch";
+import { VERCEL_DEPLOY_POLL_MAX_ATTEMPTS, vercelDeployPollDelayMs } from "@/lib/vercel-deploy-poll";
 
 export interface CreatedVercelProject {
   id: string;
@@ -69,7 +70,7 @@ export async function getVercelProjectDetails(
   platform: ReturnType<typeof assertPlatformProvisioningConfig>
 ): Promise<VercelProjectDetails | null> {
   const q = teamQuery(platform.vercelTeamId);
-  const res = await fetch(
+  const res = await platformFetch(
     `https://api.vercel.com/v9/projects/${encodeURIComponent(projectIdOrName)}${q}`,
     { headers: vercelHeaders(platform.vercelToken) }
   );
@@ -83,7 +84,7 @@ export async function findVercelProjectByName(
 ): Promise<CreatedVercelProject | null> {
   const q = teamQuery(platform.vercelTeamId);
   const search = q ? `${q}&search=${encodeURIComponent(projectName)}` : `?search=${encodeURIComponent(projectName)}`;
-  const res = await fetch(`https://api.vercel.com/v9/projects${search}`, {
+  const res = await platformFetch(`https://api.vercel.com/v9/projects${search}`, {
     headers: vercelHeaders(platform.vercelToken),
   });
   if (!res.ok) return null;
@@ -103,7 +104,7 @@ export async function enableVercelGitDeployments(
   platform: ReturnType<typeof assertPlatformProvisioningConfig>
 ): Promise<void> {
   const q = teamQuery(platform.vercelTeamId);
-  const res = await fetch(`https://api.vercel.com/v9/projects/${encodeURIComponent(projectId)}${q}`, {
+  const res = await platformFetch(`https://api.vercel.com/v9/projects/${encodeURIComponent(projectId)}${q}`, {
     method: "PATCH",
     headers: vercelHeaders(platform.vercelToken, true),
     body: JSON.stringify({
@@ -138,7 +139,7 @@ export async function requestGitProductionDeploy(options: {
   };
   if (options.link?.repoId) gitSource.repoId = options.link.repoId;
 
-  const res = await fetch(`https://api.vercel.com/v13/deployments${teamQ}`, {
+  const res = await platformFetch(`https://api.vercel.com/v13/deployments${teamQ}`, {
     method: "POST",
     headers: vercelHeaders(platform.vercelToken, true),
     body: JSON.stringify({
@@ -183,7 +184,7 @@ export async function createVercelProjectForRepo(options: {
     projectName = existing.name;
     productionUrl = existing.productionUrl ?? `https://${existing.name}.vercel.app`;
   } else {
-    const res = await fetch(`https://api.vercel.com/v11/projects${teamQ}`, {
+    const res = await platformFetch(`https://api.vercel.com/v11/projects${teamQ}`, {
       method: "POST",
       headers: vercelHeaders(platform.vercelToken, true),
       body: JSON.stringify({
@@ -293,7 +294,7 @@ async function fetchDeployments(
 ) {
   const teamQuery = deploymentsTeamQuery(teamId);
   const url = `https://api.vercel.com/v6/deployments?projectId=${encodeURIComponent(projectId)}&limit=${limit}${teamQuery}`;
-  const res = await fetch(url, {
+  const res = await platformFetch(url, {
     headers: { Authorization: `Bearer ${token}` },
   });
   return { res, url };
@@ -340,14 +341,18 @@ export async function fetchReadyDeploymentCommitRange(options: {
   return { oldest, newest };
 }
 
-export type PreviewUrlResult = {
-  url: string | null;
-  note?: string;
-  deploymentId?: string;
-  commitSha?: string;
-};
+/**
+ * Outcome of polling Vercel for a deployment.
+ * `ready` is the only state that proves a deployment is serving; everything else
+ * must NOT be shown to the user as a preview.
+ */
+export type DeploymentResult =
+  | { status: "ready"; url: string; deploymentId: string; commitSha?: string }
+  | { status: "timeout"; note: string; commitSha?: string }
+  | { status: "error"; note: string; deploymentId?: string; commitSha?: string }
+  | { status: "unavailable"; note: string };
 
-export type DeploymentResult = PreviewUrlResult;
+const FAILED_DEPLOYMENT_STATES = new Set(["ERROR", "CANCELED", "CANCELLED"]);
 
 function deploymentMatchesCommit(d: VercelDeployment, commitSha?: string): boolean {
   if (!commitSha) return true;
@@ -356,29 +361,23 @@ function deploymentMatchesCommit(d: VercelDeployment, commitSha?: string): boole
   return sha === commitSha || sha.startsWith(commitSha) || commitSha.startsWith(sha);
 }
 
-function productionFallbackWithUrl(productionUrl: string | undefined, note: string): PreviewUrlResult | null {
-  if (!productionUrl) return null;
-  const url = productionUrl.startsWith("http") ? productionUrl : `https://${productionUrl}`;
-  return { url, note };
-}
-
 export async function waitForDeployment(options: {
   projectId: string;
   teamId?: string;
-  productionUrl?: string;
   commitSha?: string;
   sinceMs?: number;
   maxAttempts?: number;
+  /** Fixed delay between polls. When omitted, uses fast-then-backoff delays. */
   delayMs?: number;
+  /** Called before each sleep so callers can heartbeat / report progress. */
+  onPoll?: (info: { attempt: number; state?: string }) => void | Promise<void>;
 }): Promise<DeploymentResult> {
   const cfg = getConfig();
   const projectId = options.projectId;
   const teamId = options.teamId ?? cfg.vercelTeamId;
   const sinceMs = options.sinceMs ?? Date.now() - 60_000;
   const maxAttempts = options.maxAttempts ?? VERCEL_DEPLOY_POLL_MAX_ATTEMPTS;
-  const delayMs = options.delayMs ?? VERCEL_DEPLOY_POLL_INTERVAL_MS;
   const commitSha = options.commitSha?.trim();
-  const fallbackProduction = options.productionUrl ?? cfg.vercelProductionUrl;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     let { res } = await fetchDeployments(projectId, teamId, cfg.vercelToken);
@@ -390,52 +389,52 @@ export async function waitForDeployment(options: {
     if (!res.ok) {
       const err = await res.text();
       if (res.status === 403) {
-        const fallback = productionFallbackWithUrl(
-          fallbackProduction,
-          "Could not list deployments (Vercel token/team). Showing last known production URL — a new deploy may still be building or blocked on Vercel."
-        );
-        if (fallback) return fallback;
-        throw new Error(`${vercel403Help(teamId)} Raw: ${err}`);
+        return {
+          status: "unavailable",
+          note: `${vercel403Help(teamId)} Raw: ${err.slice(0, 200)}`,
+        };
       }
       throw new Error(`Vercel API error (${res.status}): ${err}`);
     }
 
     const data = (await res.json()) as DeploymentsResponse;
-    const candidates = data.deployments
-      .filter((d) => {
-        const state = d.readyState ?? d.state;
-        if (state !== "READY") return false;
-        if (d.createdAt < sinceMs - 120_000) return false;
-        return deploymentMatchesCommit(d, commitSha);
-      })
+    const relevant = data.deployments
+      .filter((d) => d.createdAt >= sinceMs - 120_000 && deploymentMatchesCommit(d, commitSha))
       .sort((a, b) => b.createdAt - a.createdAt);
 
-    const ready = candidates[0];
+    const ready = relevant.find((d) => (d.readyState ?? d.state) === "READY");
     if (ready?.url) {
       const url = ready.url.startsWith("http") ? ready.url : `https://${ready.url}`;
       return {
+        status: "ready",
         url,
         deploymentId: ready.uid,
         commitSha: ready.meta?.githubCommitSha ?? commitSha,
       };
     }
 
-    await sleep(delayMs);
+    // A failed build for this commit will never become READY: stop polling right away.
+    const failed = commitSha
+      ? relevant.find((d) => FAILED_DEPLOYMENT_STATES.has(d.readyState ?? d.state))
+      : undefined;
+    if (failed) {
+      return {
+        status: "error",
+        note: `Vercel deployment ${failed.readyState ?? failed.state} for commit ${commitSha!.slice(0, 7)}.`,
+        deploymentId: failed.uid,
+        commitSha,
+      };
+    }
+
+    await options.onPoll?.({ attempt, state: relevant[0]?.readyState ?? relevant[0]?.state });
+    await sleep(options.delayMs ?? vercelDeployPollDelayMs(attempt));
   }
 
-  if (commitSha) {
-    const fallback = productionFallbackWithUrl(
-      fallbackProduction,
-      `No READY deployment found for commit ${commitSha.slice(0, 7)} yet. Showing production URL if available.`
-    );
-    if (fallback) return { ...fallback, commitSha };
-  }
-
-  const fallback = productionFallbackWithUrl(
-    fallbackProduction,
-    "No new READY deployment appeared in time. Showing production URL — check Vercel if the latest git push was blocked."
-  );
-  if (fallback) return fallback;
-
-  return { url: null };
+  return {
+    status: "timeout",
+    note: commitSha
+      ? `No READY deployment found for commit ${commitSha.slice(0, 7)} in time.`
+      : "No new READY deployment appeared in time.",
+    commitSha,
+  };
 }

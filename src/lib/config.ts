@@ -105,8 +105,30 @@ export function getAdminEmails(): Set<string> {
   );
 }
 
-export function getConfig() {
+/** `direct` = app calls api.cursor.com with CURSOR_API_KEY; `gateway` = Vercel proxy + ENGINE_GATEWAY_TOKEN (no key on blocked regions). */
+export type CursorTransportMode = "direct" | "gateway";
+
+/**
+ * Resolves transport: explicit `CURSOR_TRANSPORT`, else infer gateway when gateway vars are set
+ * and `CURSOR_API_KEY` is absent (common Liara setup after removing the key).
+ */
+export function getCursorTransport(): CursorTransportMode {
+  const raw = process.env.CURSOR_TRANSPORT?.trim().toLowerCase();
+  if (raw === "gateway" || raw === "direct") return raw;
+
+  const gatewayUrl = process.env.ENGINE_GATEWAY_URL?.trim() ?? "";
+  const gatewayToken = process.env.ENGINE_GATEWAY_TOKEN?.trim() ?? "";
   const cursorApiKey = process.env.CURSOR_API_KEY?.trim() ?? "";
+  if (gatewayUrl && gatewayToken && !cursorApiKey) return "gateway";
+
+  return "direct";
+}
+
+export function getConfig() {
+  const cursorTransport = getCursorTransport();
+  const cursorApiKey = process.env.CURSOR_API_KEY?.trim() ?? "";
+  const engineGatewayUrl = process.env.ENGINE_GATEWAY_URL?.trim() ?? "";
+  const engineGatewayToken = process.env.ENGINE_GATEWAY_TOKEN?.trim() ?? "";
   const templateRepoUrl = process.env.TEMPLATE_REPO_URL?.trim() ?? "";
   const templateRepoRef = process.env.TEMPLATE_REPO_REF?.trim() || "main";
   const vercelToken = process.env.VERCEL_TOKEN?.trim() ?? "";
@@ -116,9 +138,18 @@ export function getConfig() {
   const vercelProductionUrl = process.env.VERCEL_PRODUCTION_URL?.trim();
   const cursorModelId = resolveCursorModelId();
 
+  let cursorApiBase = "https://api.cursor.com";
+  if (cursorTransport === "gateway") {
+    const base = engineGatewayUrl.replace(/\/$/, "");
+    cursorApiBase = base.endsWith("/api/cursor") ? base : `${base}/api/cursor`;
+  }
+
   return {
     codingEngine: getCodingEngineId(),
+    cursorTransport,
     cursorApiKey,
+    engineGatewayUrl,
+    engineGatewayToken,
     templateRepoUrl,
     templateRepoRef,
     vercelToken,
@@ -126,7 +157,7 @@ export function getConfig() {
     vercelTeamId,
     vercelProductionUrl,
     cursorModelId,
-    cursorApiBase: "https://api.cursor.com",
+    cursorApiBase,
   };
 }
 
@@ -135,10 +166,19 @@ export function assertServerConfig() {
   const missing: string[] = [];
 
   if (!c.vercelToken) missing.push("VERCEL_TOKEN");
-  if (!c.cursorApiKey) missing.push("CURSOR_API_KEY");
+  if (c.cursorTransport === "direct") {
+    if (!c.cursorApiKey) missing.push("CURSOR_API_KEY");
+  } else {
+    if (!c.engineGatewayUrl) missing.push("ENGINE_GATEWAY_URL");
+    if (!c.engineGatewayToken) missing.push("ENGINE_GATEWAY_TOKEN");
+  }
 
   if (missing.length) {
-    throw new Error(`Missing env: ${missing.join(", ")}. Copy .env.example to .env.local`);
+    const hint =
+      c.cursorTransport === "direct" && !c.cursorApiKey
+        ? " Either set CURSOR_API_KEY, or set ENGINE_GATEWAY_URL + ENGINE_GATEWAY_TOKEN (and remove CURSOR_API_KEY — transport becomes gateway automatically), or set CURSOR_TRANSPORT=gateway explicitly."
+        : "";
+    throw new Error(`Missing env: ${missing.join(", ")}.${hint}`);
   }
   return c;
 }

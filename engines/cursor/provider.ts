@@ -1,10 +1,12 @@
 import { Agent, CursorAgentError, type SDKUserMessage } from "@cursor/sdk";
 import { getConfig, getCursorModelSelection } from "@/lib/config";
 import { streamCloudAgentRun } from "@/services/cursor-cloud-stream";
+import { resumeRunByPolling } from "./resume-run";
 import type {
   CodingEngineProvider,
   EngineStreamEvent,
   ExecuteRunResult,
+  ResumeRunInput,
   StartRunInput,
 } from "../types";
 
@@ -61,6 +63,13 @@ export const cursorEngineProvider: CodingEngineProvider = {
       const agentId = agent.agentId;
       const runId = run.id;
 
+      // Persist ids right away: if the process dies mid-run, recovery re-attaches by runId.
+      try {
+        await input.onRunStarted?.({ agentId, runId });
+      } catch (e) {
+        console.error("[cursor] onRunStarted failed", e);
+      }
+
       const [finished, result] = await Promise.all([
         streamCloudAgentRun(agentId, runId, forwardStreamEvent),
         run.wait(),
@@ -92,5 +101,17 @@ export const cursorEngineProvider: CodingEngineProvider = {
     } finally {
       await agent.close();
     }
+  },
+
+  /**
+   * Re-attach to a run started before a restart. Cursor's REST stream replays from the start of
+   * the run (and Cursor event ids are not stored), so replaying it would duplicate events already
+   * saved; poll the run status instead and report completion.
+   */
+  async resumeRun(
+    input: ResumeRunInput,
+    onEvent: (event: EngineStreamEvent) => void
+  ): Promise<ExecuteRunResult> {
+    return resumeRunByPolling(input, onEvent);
   },
 };

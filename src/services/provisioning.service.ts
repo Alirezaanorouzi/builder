@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { getPlatformConfig } from "@/lib/config";
+import { assertPlatformProvisioningConfig, getPlatformConfig } from "@/lib/config";
 import type { ProvisioningStep } from "@prisma/client";
 import { transitionSiteStatus } from "@/services/site-status.service";
 import { recordBaselineCommit, recordProductionCommit } from "@/services/preview-commit.service";
@@ -92,7 +92,7 @@ export async function runSiteProvisioning(siteId: string): Promise<void> {
     data: { provisioningError: null },
   });
 
-  const platform = getPlatformConfig();
+  const platform = assertPlatformProvisioningConfig();
   let step = site.resources.provisioningStep;
   let githubFullName = site.resources.githubRepoFullName;
   let githubRepoId = site.resources.githubRepoId;
@@ -139,36 +139,46 @@ export async function runSiteProvisioning(siteId: string): Promise<void> {
 
     if (githubFullName) {
       const resourcesNow = await prisma.siteResources.findUnique({ where: { siteId } });
-      if (!resourcesNow?.vercelProjectId) {
+      let vercelProjectId = resourcesNow?.vercelProjectId;
+
+      if (!vercelProjectId) {
         await setStep(siteId, "pending_vercel_project");
         await sleep(2500);
+        const project = await createVercelProjectForRepo({
+          projectName: repoName,
+          githubRepoFullName: githubFullName,
+        });
+        vercelProjectId = project.id;
+        await prisma.siteResources.update({
+          where: { siteId },
+          data: {
+            vercelProjectId: project.id,
+            vercelTeamId: platform.vercelTeamId ?? null,
+            productionUrl: project.productionUrl,
+            provisioningStep: "pending_initial_deploy",
+            provisioningError: null,
+          },
+        });
       }
-      const project = await createVercelProjectForRepo({
-        projectName: repoName,
-        githubRepoFullName: githubFullName,
-      });
-      await prisma.siteResources.update({
-        where: { siteId },
-        data: {
-          vercelProjectId: project.id,
-          vercelTeamId: platform.vercelTeamId ?? null,
-          productionUrl: project.productionUrl,
-          provisioningStep: "pending_initial_deploy",
-          provisioningError: null,
-        },
-      });
+
+      if (step === "complete" && vercelProjectId) {
+        await transitionSiteStatus(siteId, "active", {
+          message: "Provisioning already complete",
+          setActivatedAt: true,
+        });
+        return;
+      }
 
       await setStep(siteId, "pending_initial_deploy");
       try {
         const { waitForDeployment } = await import("@/services/vercel.service");
         const initialDeploy = await waitForDeployment({
-          projectId: project.id,
+          projectId: vercelProjectId,
           teamId: platform.vercelTeamId,
-          productionUrl: project.productionUrl ?? undefined,
           maxAttempts: 18,
           delayMs: 10_000,
         });
-        if (initialDeploy.commitSha) {
+        if (initialDeploy.status === "ready" && initialDeploy.commitSha) {
           await recordProductionCommit(siteId, initialDeploy.commitSha);
         }
       } catch {
@@ -181,7 +191,10 @@ export async function runSiteProvisioning(siteId: string): Promise<void> {
       });
     }
   } catch (e) {
-    const message = e instanceof Error ? e.message : "Provisioning failed";
+    const cause =
+      e && typeof e === "object" && "cause" in e ? String((e as { cause?: unknown }).cause ?? "") : "";
+    const base = e instanceof Error ? e.message : "Provisioning failed";
+    const message = cause && !base.includes(cause) ? `${base} (${cause})` : base;
     await prisma.siteResources.update({
       where: { siteId },
       data: { provisioningError: message },

@@ -67,6 +67,7 @@ type SsePayload = {
   errorMessage?: string;
   startedAt?: string;
   finishedAt?: string;
+  previewChanged?: boolean;
 };
 
 function buildPreviewIframeSrc(baseUrl: string, refreshKey: number): string {
@@ -118,8 +119,8 @@ export function Chat() {
   const esRef = useRef<EventSource | null>(null);
   const seenEventIdsRef = useRef<Map<string, Set<string>>>(new Map());
   const activeBuildRunRef = useRef<string | null>(null);
-  const previewRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const previewRefreshScheduledRef = useRef(false);
+  /** Build run whose agent finished successfully (a later deploy failure must still be shown). */
+  const agentSucceededRunRef = useRef<string | null>(null);
 
   const getSeenSet = useCallback((buildRunId: string) => {
     let set = seenEventIdsRef.current.get(buildRunId);
@@ -268,10 +269,6 @@ export function Chat() {
   }, []);
 
   const closeStream = useCallback(() => {
-    if (previewRefreshTimerRef.current) {
-      clearInterval(previewRefreshTimerRef.current);
-      previewRefreshTimerRef.current = null;
-    }
     setPreviewPublishing(false);
     esRef.current?.close();
     esRef.current = null;
@@ -288,66 +285,56 @@ export function Chat() {
     setPreviewRefreshKey((k) => k + 1);
   }, []);
 
-  const schedulePreviewRefreshAfterBuild = useCallback(() => {
-    if (previewRefreshScheduledRef.current) return;
-    previewRefreshScheduledRef.current = true;
-    if (previewRefreshTimerRef.current) {
-      clearTimeout(previewRefreshTimerRef.current);
-    }
-    setPublishWaitStartedAt(Date.now());
-    setPreviewPublishing(true);
-
-    const pollMs = 8_000;
-    const maxPolls = 24;
-    let polls = 0;
-    const pollForPreviewUrl = () => {
-      polls += 1;
-      void loadMe().then((site) => {
-        if (site?.productionUrl) {
-          setPreviewPublishing(false);
-          refreshPreview();
-          previewRefreshScheduledRef.current = false;
-          if (previewRefreshTimerRef.current) {
-            clearTimeout(previewRefreshTimerRef.current);
-            previewRefreshTimerRef.current = null;
-          }
-        } else if (polls >= maxPolls) {
-          setPreviewPublishing(false);
-          refreshPreview();
-          previewRefreshScheduledRef.current = false;
-        }
-      });
-    };
-
-    pollForPreviewUrl();
-    previewRefreshTimerRef.current = setInterval(pollForPreviewUrl, pollMs);
-    setTimeout(() => {
-      if (previewRefreshTimerRef.current) {
-        clearInterval(previewRefreshTimerRef.current);
-        previewRefreshTimerRef.current = null;
-      }
-      setPreviewPublishing(false);
-      previewRefreshScheduledRef.current = false;
-    }, pollMs * maxPolls + 2_000);
-  }, [loadMe, refreshPreview]);
-
-  const applyAgentRunTerminal = useCallback(
+  /**
+   * The agent finished. On success the server may still be publishing the site, so keep the
+   * run "busy" until `done`; on failure release the composer immediately.
+   */
+  const applyAgentDone = useCallback(
     (buildRunId: string, data: SsePayload) => {
       finishBuildRun(buildRunId, data);
       const failed =
         data.status === "failed" ||
         data.status === "cancelled" ||
         Boolean(data.errorMessage);
-      if (!failed) {
-        schedulePreviewRefreshAfterBuild();
+      if (failed) {
+        setBusy(false);
+      } else {
+        agentSucceededRunRef.current = buildRunId;
       }
-      setBusy(false);
     },
-    [finishBuildRun, schedulePreviewRefreshAfterBuild]
+    [finishBuildRun]
+  );
+
+  /** Terminal state of the whole run (agent + deployment confirmation). */
+  const applyRunDone = useCallback(
+    (buildRunId: string, data: SsePayload) => {
+      const failed =
+        data.status === "failed" ||
+        data.status === "cancelled" ||
+        Boolean(data.errorMessage);
+      finishBuildRun(buildRunId, data);
+      if (failed && data.errorMessage && agentSucceededRunRef.current === buildRunId) {
+        // Agent work finished fine but publishing failed: the activity block is already closed.
+        appendError(data.errorMessage);
+      }
+      setPreviewPublishing(false);
+      setBusy(false);
+      if (!failed) {
+        // Single refresh instead of polling: the server confirmed the deployment before `done`.
+        void loadMe().then((site) => {
+          if (site?.productionUrl && data.previewChanged !== false) refreshPreview();
+        });
+      }
+    },
+    [appendError, finishBuildRun, loadMe, refreshPreview]
   );
 
   const handleSsePayload = useCallback(
-    (buildRunId: string, kind: RawActivityInput["kind"] | "assistant" | "agent_done" | "done", data: SsePayload) => {
+    (
+      buildRunId: string,
+      kind: RawActivityInput["kind"] | "assistant" | "agent_done" | "done" | "phase",
+      data: SsePayload
+    ) => {
       const eventId = data.eventId ?? `${kind}-${Date.now()}`;
 
       if (kind === "assistant") {
@@ -355,11 +342,19 @@ export function Chat() {
         return;
       }
 
+      if (kind === "phase") {
+        if (data.status === "deploying") {
+          setPublishWaitStartedAt(Date.now());
+          setPreviewPublishing(true);
+        }
+        return;
+      }
+
       if (kind === "agent_done") {
         const seen = getSeenSet(buildRunId);
         if (seen.has(eventId)) return;
         seen.add(eventId);
-        applyAgentRunTerminal(buildRunId, data);
+        applyAgentDone(buildRunId, data);
         return;
       }
 
@@ -367,7 +362,7 @@ export function Chat() {
         const seen = getSeenSet(buildRunId);
         if (seen.has(eventId)) return;
         seen.add(eventId);
-        applyAgentRunTerminal(buildRunId, data);
+        applyRunDone(buildRunId, data);
         return;
       }
 
@@ -381,6 +376,10 @@ export function Chat() {
           status: "failed",
           errorMessage: data.message,
         });
+        if (agentSucceededRunRef.current === buildRunId && data.message) {
+          // Agent finished fine but publishing failed: its activity block is already closed.
+          appendError(data.message);
+        }
         return;
       }
 
@@ -398,7 +397,15 @@ export function Chat() {
         });
       }
     },
-    [appendAssistantChunk, applyAgentRunTerminal, finishBuildRun, getSeenSet, ingestActivity]
+    [
+      appendAssistantChunk,
+      appendError,
+      applyAgentDone,
+      applyRunDone,
+      finishBuildRun,
+      getSeenSet,
+      ingestActivity,
+    ]
   );
 
   const startStream = useCallback(
@@ -406,7 +413,7 @@ export function Chat() {
       closeStream();
       activeBuildRunRef.current = buildRunId;
       localStorage.setItem(BUILD_RUN_KEY, buildRunId);
-      previewRefreshScheduledRef.current = false;
+      agentSucceededRunRef.current = null;
       setBuildWaitStartedAt(Date.now());
       ensureActivityBlock(buildRunId);
 
@@ -428,6 +435,7 @@ export function Chat() {
       bind("status", "status");
       bind("activity", "activity");
       bind("assistant", "assistant");
+      bind("phase", "phase");
       bind("agent_done", "agent_done");
       bind("done", "done");
 
@@ -644,7 +652,7 @@ export function Chat() {
   return (
     <div className="app-root" style={styles.page}>
       <header className="app-header-bar" style={styles.header}>
-        <div style={styles.headerSide}>
+        <div style={styles.headerStart}>
           {userEmail && (
             <div ref={accountRef} style={styles.accountWrap}>
               <button
@@ -679,40 +687,40 @@ export function Chat() {
           )}
         </div>
 
-        <div style={styles.headerSide}>
-          {!showAccountSetup && (
-        <div style={styles.tabGroup} role="tablist" aria-label="بخش‌های اصلی">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === "preview"}
-            className="app-tab"
-            style={{
-              ...styles.tab,
-              ...(activeTab === "preview" ? styles.tabActive : {}),
-            }}
-            onClick={() => setActiveTab("preview")}
-          >
-            پیش‌نمایش
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === "build"}
-            className="app-tab"
-            style={{
-              ...styles.tab,
-              ...(activeTab === "build" ? styles.tabActive : {}),
-            }}
-            onClick={() => setActiveTab("build")}
-          >
-            ساخت
-          </button>
-        </div>
-          )}
-        </div>
+        {!showAccountSetup && (
+          <div style={styles.headerCenter}>
+            <div style={styles.tabGroup} role="tablist" aria-label="بخش‌های اصلی">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === "preview"}
+                className="app-tab"
+                style={{
+                  ...styles.tab,
+                  ...(activeTab === "preview" ? styles.tabActive : {}),
+                }}
+                onClick={() => setActiveTab("preview")}
+              >
+                پیش‌نمایش
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === "build"}
+                className="app-tab"
+                style={{
+                  ...styles.tab,
+                  ...(activeTab === "build" ? styles.tabActive : {}),
+                }}
+                onClick={() => setActiveTab("build")}
+              >
+                ساخت
+              </button>
+            </div>
+          </div>
+        )}
 
-        <div style={styles.headerSide} />
+        <div style={styles.headerEnd} aria-hidden />
       </header>
 
       {showAccountSetup ? (
@@ -811,8 +819,8 @@ export function Chat() {
         <div className="app-preview" style={styles.previewColumn}>
           {busy || previewPublishing ? (
             <PreviewWaitingView
-              startedAtMs={busy ? buildWaitStartedAt : publishWaitStartedAt}
-              statusText={busy ? PREVIEW_WAIT_BUILDING : PREVIEW_WAIT_PUBLISHING}
+              startedAtMs={previewPublishing ? publishWaitStartedAt : buildWaitStartedAt}
+              statusText={previewPublishing ? PREVIEW_WAIT_PUBLISHING : PREVIEW_WAIT_BUILDING}
             />
           ) : !previewUrl ? (
             <div style={styles.previewEmpty}>
@@ -1016,19 +1024,28 @@ const styles: Record<string, CSSProperties> = {
     flexDirection: "column",
   },
   header: {
-    display: "flex",
+    display: "grid",
+    gridTemplateColumns: "1fr auto 1fr",
     alignItems: "center",
-    justifyContent: "space-between",
     gap: 8,
     paddingBlock: 10,
+    paddingInline: 12,
     borderBottom: "1px solid var(--border)",
     background: "var(--bg)",
   },
-  headerSide: {
-    flex: "1 1 0",
-    minWidth: 0,
+  headerStart: {
     display: "flex",
     alignItems: "center",
+    justifyContent: "flex-start",
+    minWidth: 0,
+  },
+  headerCenter: {
+    display: "flex",
+    justifyContent: "center",
+    justifySelf: "center",
+  },
+  headerEnd: {
+    minWidth: 0,
   },
   tabGroup: {
     display: "inline-flex",

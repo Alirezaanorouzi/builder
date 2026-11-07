@@ -53,23 +53,18 @@ export async function recordProductionCommit(siteId: string, sha: string): Promi
   });
 }
 
-/** When preview is still locked, sync production SHA from git (fast) then Vercel (deploy truth). */
+/**
+ * When preview is still locked, sync the production SHA from Vercel (deploy truth).
+ * Never opens the gate from GitHub HEAD: a pushed commit is not a serving deployment.
+ */
 export async function refreshProductionCommitWhenLocked(siteId: string): Promise<void> {
   const row = await prisma.siteResources.findUnique({
     where: { siteId },
     select: previewGateResourceSelect,
   });
   const r = row as PreviewGateResourceRow | null;
-  if (!r?.baselineCommitSha || !r.githubRepoFullName || !r.vercelProjectId) return;
+  if (!r?.baselineCommitSha || !r.vercelProjectId) return;
   if (isPreviewUnlocked(r)) return;
-
-  const head = await getDefaultBranchHeadSha(r.githubRepoFullName, r.githubDefaultBranch).catch(
-    () => null
-  );
-  if (head && !isSameCommit(r.baselineCommitSha, head)) {
-    await recordProductionCommit(siteId, head);
-    return;
-  }
 
   const range = await fetchReadyDeploymentCommitRange({
     projectId: r.vercelProjectId,

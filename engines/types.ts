@@ -28,6 +28,18 @@ export interface StartRunInput {
   promptImages?: EnginePromptImage[];
   agentId: string | null;
   tenant: TenantContext;
+  /**
+   * Called as soon as the engine accepted the prompt (agent + run exist remotely).
+   * Persist the ids here so a restart can re-attach instead of losing the run.
+   */
+  onRunStarted?: (info: { agentId: string; runId: string }) => void | Promise<void>;
+}
+
+export interface ResumeRunInput {
+  agentId: string;
+  runId: string;
+  /** Called on every status poll (use it as a liveness heartbeat). */
+  onHeartbeat?: () => void | Promise<void>;
 }
 
 export interface ExecuteRunResult extends EngineStreamResult {
@@ -39,6 +51,11 @@ export interface CodingEngineProvider {
   readonly id: CodingEngineId;
   executeRun(
     input: StartRunInput,
+    onEvent: (event: EngineStreamEvent) => void
+  ): Promise<ExecuteRunResult>;
+  /** Re-attach to a run that was started earlier (e.g. before a restart) and wait for its end. */
+  resumeRun(
+    input: ResumeRunInput,
     onEvent: (event: EngineStreamEvent) => void
   ): Promise<ExecuteRunResult>;
 }
@@ -69,4 +86,6 @@ export interface EngineStreamResult {
   /** When true, orchestrator should poll Vercel for preview URL. */
   requestPreview: boolean;
   commitSha?: string;
+  /** Why the run did not finish (set when `finished` is false). */
+  errorMessage?: string;
 }

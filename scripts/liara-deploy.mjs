@@ -47,6 +47,10 @@ console.log(
 );
 
 const deployArgs = ["deploy", "--platform=next", "--app", appId];
+// Full rebuild without Docker/npm cache — much slower. Default off so occasional CLI deploys are faster.
+if (process.env.LIARA_DEPLOY_NO_CACHE?.trim() === "1") {
+  deployArgs.push("--no-cache");
+}
 const result = liara(deployArgs);
 
 if (result.status !== 0) {

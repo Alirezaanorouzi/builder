@@ -9,3 +9,4 @@ terminals
 *.log
 template/node_modules
 template/.next
+gateway
