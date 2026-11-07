@@ -20,6 +20,14 @@ import { getDefaultBranchHeadSha } from "@/services/github.service";
 import { waitForDeployment } from "@/services/vercel.service";
 import { recordProductionCommit } from "@/services/preview-commit.service";
 import { vercelDeployPollOptions } from "@/lib/vercel-deploy-poll";
+import {
+  DEFERRED_DEPLOY_CONFIRMATION,
+  DEPLOY_NOT_READY_IN_TIME,
+  GENERIC_BUILD_FAILED,
+  VERCEL_DEPLOY_AUTH_ISSUE,
+  VERCEL_BUILD_FAILED,
+} from "@/lib/build-user-messages";
+import type { DeploymentResult } from "@/services/vercel.service";
 import type { TenantContext } from "@engines/types";
 
 type BuildRunRow = NonNullable<Awaited<ReturnType<typeof updateBuildRunStatus>>>;
@@ -27,15 +35,31 @@ type BuildRunRow = NonNullable<Awaited<ReturnType<typeof updateBuildRunStatus>>>
 type RunOutcome = {
   run: BuildRunRow;
   previewChanged: boolean;
+  /** Agent finished; deploy confirmation resumes via stale-run recovery. */
+  deferConfirmation?: boolean;
 };
 
+function isRetryableDeployOutcome(deploy: DeploymentResult): boolean {
+  if (deploy.status === "timeout") return deploy.retryable !== false;
+  if (deploy.status === "unavailable") return deploy.retryable === true;
+  return false;
+}
+
+async function deferDeployConfirmation(buildRunId: string): Promise<RunOutcome> {
+  publishBuildStream(buildRunId, "status", { message: DEFERRED_DEPLOY_CONFIRMATION });
+  await touchBuildRun(buildRunId);
+  const run = await prisma.buildRun.findUnique({ where: { id: buildRunId } });
+  if (!run) throw new Error(`Build run ${buildRunId} missing after defer`);
+  return { run, previewChanged: false, deferConfirmation: true };
+}
+
 async function readHeadWithRetry(tenant: TenantContext): Promise<string | null> {
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 5; attempt++) {
     try {
       return await getDefaultBranchHeadSha(tenant.repoFullName, tenant.repoRef);
     } catch (e) {
       console.error("[build] github head lookup failed", attempt + 1, e);
-      await new Promise((r) => setTimeout(r, 1500));
+      await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
     }
   }
   return null;
@@ -56,13 +80,8 @@ export async function confirmDeploymentForRun(options: {
 
   const headAfter = await readHeadWithRetry(tenant);
   if (!headAfter) {
-    const message = "Could not read the GitHub branch head to confirm the deployment.";
-    publishBuildStream(buildRunId, "error", { message });
-    const run = await updateBuildRunStatus(buildRunId, "failed", {
-      errorMessage: message,
-      finishedAt: new Date(),
-    });
-    return { run, previewChanged: false };
+    console.warn("[build] github head unavailable after agent; deferring confirmation", buildRunId);
+    return deferDeployConfirmation(buildRunId);
   }
 
   const resources = await prisma.siteResources.findUnique({
@@ -110,15 +129,29 @@ export async function confirmDeploymentForRun(options: {
     return { run, previewChanged: true };
   }
 
-  const message =
-    deploy.status === "timeout"
-      ? "The deployment did not become ready in time. Check Vercel, then try again."
-      : `Deployment failed: ${deploy.note}`;
-  publishBuildStream(buildRunId, "error", { message });
+  if (isRetryableDeployOutcome(deploy)) {
+    console.warn("[build] deploy confirmation inconclusive; deferring", buildRunId, deploy.status, deploy.note);
+    return deferDeployConfirmation(buildRunId);
+  }
+
+  if (deploy.status === "unavailable" && deploy.retryable === false) {
+    console.error("[build] vercel auth/config", buildRunId, deploy.note);
+    publishBuildStream(buildRunId, "error", { message: VERCEL_DEPLOY_AUTH_ISSUE });
+    const run = await updateBuildRunStatus(buildRunId, "failed", {
+      commitSha: headAfter,
+      errorMessage: VERCEL_DEPLOY_AUTH_ISSUE,
+      finishedAt: new Date(),
+    });
+    return { run, previewChanged: false };
+  }
+
+  const userMessage = deploy.status === "error" ? VERCEL_BUILD_FAILED : DEPLOY_NOT_READY_IN_TIME;
+  console.error("[build] vercel deploy terminal failure", buildRunId, deploy);
+  publishBuildStream(buildRunId, "error", { message: userMessage });
   const run = await updateBuildRunStatus(buildRunId, "failed", {
     commitSha: headAfter,
     deploymentId: deploy.status === "error" ? deploy.deploymentId : undefined,
-    errorMessage: message,
+    errorMessage: userMessage,
     finishedAt: new Date(),
   });
   return { run, previewChanged: false };
@@ -135,29 +168,46 @@ async function withRunLifecycle(
   const stopHeartbeat = startBuildRunHeartbeat(buildRunId);
   let terminalStatus: BuildRunRow | null = null;
   let previewChanged = false;
+  let skipTerminalDone = false;
 
   try {
     const outcome = await work();
-    terminalStatus = outcome.run;
-    previewChanged = outcome.previewChanged;
+    if (outcome.deferConfirmation) {
+      skipTerminalDone = true;
+    } else {
+      terminalStatus = outcome.run;
+      previewChanged = outcome.previewChanged;
+    }
   } catch (e) {
-    const message = e instanceof Error ? e.message : "Build failed";
-    publishBuildStream(buildRunId, "error", { message });
-    try {
-      terminalStatus = await updateBuildRunStatus(buildRunId, "failed", {
-        errorMessage: message,
-        finishedAt: new Date(),
-      });
-    } catch (persistErr) {
-      console.error("[build] failed to persist error state", buildRunId, persistErr);
+    console.error("[build] unhandled run error", buildRunId, e);
+    const current = await prisma.buildRun.findUnique({
+      where: { id: buildRunId },
+      select: { status: true },
+    });
+    if (current?.status === "pushing" || current?.status === "deploying") {
+      publishBuildStream(buildRunId, "status", { message: DEFERRED_DEPLOY_CONFIRMATION });
+      await touchBuildRun(buildRunId);
+      skipTerminalDone = true;
+    } else {
+      publishBuildStream(buildRunId, "error", { message: GENERIC_BUILD_FAILED });
+      try {
+        terminalStatus = await updateBuildRunStatus(buildRunId, "failed", {
+          errorMessage: GENERIC_BUILD_FAILED,
+          finishedAt: new Date(),
+        });
+      } catch (persistErr) {
+        console.error("[build] failed to persist error state", buildRunId, persistErr);
+      }
     }
   } finally {
     stopHeartbeat();
-    if (terminalStatus) {
-      publishBuildRunDone(buildRunId, terminalStatus, { previewChanged });
-    } else {
-      const latest = await prisma.buildRun.findUnique({ where: { id: buildRunId } });
-      if (latest) publishBuildRunDone(buildRunId, latest, { previewChanged });
+    if (!skipTerminalDone) {
+      if (terminalStatus) {
+        publishBuildRunDone(buildRunId, terminalStatus, { previewChanged });
+      } else {
+        const latest = await prisma.buildRun.findUnique({ where: { id: buildRunId } });
+        if (latest) publishBuildRunDone(buildRunId, latest, { previewChanged });
+      }
     }
     await flushBuildStream(buildRunId);
   }

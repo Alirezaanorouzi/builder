@@ -1,4 +1,32 @@
-/** Shared fetch for GitHub/Vercel from Liara — undici defaults ~10s connect; routes can be flaky. */
+import { Agent, fetch as undiciFetch, type RequestInit as UndiciRequestInit } from "undici";
+
+/** Long-lived connections for Liara → GitHub/Vercel (poll interval exceeds undici default keep-alive). */
+const platformDispatcher = new Agent({
+  connectTimeout: 30_000,
+  keepAliveTimeout: 60_000,
+  keepAliveMaxTimeout: 60_000,
+});
+
+export class PlatformHttpError extends Error {
+  readonly href: string;
+  readonly attempts: number;
+
+  constructor(href: string, attempts: number, cause: unknown) {
+    super(`Platform HTTP failed after ${attempts} tries: ${href}`);
+    this.name = "PlatformHttpError";
+    this.href = href;
+    this.attempts = attempts;
+    this.cause = cause;
+  }
+}
+
+function backoffMs(attempt: number): number {
+  const base = 1_500 * (attempt + 1);
+  const jitter = Math.floor(Math.random() * 800);
+  return base + jitter;
+}
+
+/** Shared fetch for GitHub/Vercel from Liara — tuned connect + keep-alive; retries with jitter. */
 export async function platformFetch(
   url: string | URL,
   init?: RequestInit,
@@ -11,26 +39,21 @@ export async function platformFetch(
 
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
-      return await fetch(href, {
+      const res = await undiciFetch(href, {
         ...init,
+        dispatcher: platformDispatcher,
         signal: AbortSignal.timeout(timeoutMs),
-      });
+      } as UndiciRequestInit);
+      return res as unknown as Response;
     } catch (e) {
       last = e;
       if (attempt < retries - 1) {
-        await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+        await new Promise((r) => setTimeout(r, backoffMs(attempt)));
       }
     }
   }
 
-  const detail =
-    last && typeof last === "object" && "cause" in last && (last as { cause?: unknown }).cause
-      ? String((last as { cause: unknown }).cause)
-      : last instanceof Error
-        ? last.message
-        : String(last);
-  throw new Error(
-    `Platform HTTP failed after ${retries} tries (${href}): ${detail}. ` +
-      `If timeouts persist from Liara to api.vercel.com, provisioning needs a Vercel-region proxy (like the Cursor gateway).`
-  );
+  const err = new PlatformHttpError(href, retries, last);
+  console.error("[platform-fetch]", err.message, last);
+  throw err;
 }

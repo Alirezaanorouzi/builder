@@ -22,6 +22,7 @@ import {
   type AgentRunPhase,
   type RawActivityInput,
 } from "@/lib/agent-activity";
+import { DEFERRED_DEPLOY_CONFIRMATION } from "@/lib/build-user-messages";
 import { signOutBuilderAccount } from "@/lib/sign-out";
 import {
   BUILDER_BUILD_RUN_KEY,
@@ -385,6 +386,15 @@ export function Chat() {
 
       if (kind === "status" || kind === "activity") {
         if (!data.message?.trim() && kind === "status") return;
+        if (
+          kind === "status" &&
+          agentSucceededRunRef.current === buildRunId &&
+          data.message === DEFERRED_DEPLOY_CONFIRMATION
+        ) {
+          setPreviewPublishing(false);
+          setBusy(false);
+          agentSucceededRunRef.current = null;
+        }
         ingestActivity(buildRunId, {
           eventId,
           kind,

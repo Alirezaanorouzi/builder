@@ -4,7 +4,7 @@ import path from "node:path";
 const nextConfig = {
   output: "standalone",
   outputFileTracingRoot: path.join(process.cwd()),
-  serverExternalPackages: ["@cursor/sdk"],
+  serverExternalPackages: ["@cursor/sdk", "undici"],
   // Keep the SDK in the Liara standalone image (webpack does not bundle it).
   outputFileTracingIncludes: {
     "/*": [

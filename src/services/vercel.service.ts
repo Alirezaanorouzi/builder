@@ -1,6 +1,10 @@
 import { assertPlatformProvisioningConfig, getConfig } from "@/lib/config";
 import { platformFetch } from "@/lib/platform-fetch";
-import { VERCEL_DEPLOY_POLL_MAX_ATTEMPTS, vercelDeployPollDelayMs } from "@/lib/vercel-deploy-poll";
+import {
+  VERCEL_DEPLOY_POLL_MAX_ATTEMPTS,
+  VERCEL_POLL_MAX_CONSECUTIVE_FAILURES,
+  vercelDeployPollDelayMs,
+} from "@/lib/vercel-deploy-poll";
 
 export interface CreatedVercelProject {
   id: string;
@@ -348,9 +352,9 @@ export async function fetchReadyDeploymentCommitRange(options: {
  */
 export type DeploymentResult =
   | { status: "ready"; url: string; deploymentId: string; commitSha?: string }
-  | { status: "timeout"; note: string; commitSha?: string }
+  | { status: "timeout"; note: string; commitSha?: string; retryable?: boolean }
   | { status: "error"; note: string; deploymentId?: string; commitSha?: string }
-  | { status: "unavailable"; note: string };
+  | { status: "unavailable"; note: string; retryable?: boolean };
 
 const FAILED_DEPLOYMENT_STATES = new Set(["ERROR", "CANCELED", "CANCELLED"]);
 
@@ -378,24 +382,47 @@ export async function waitForDeployment(options: {
   const sinceMs = options.sinceMs ?? Date.now() - 60_000;
   const maxAttempts = options.maxAttempts ?? VERCEL_DEPLOY_POLL_MAX_ATTEMPTS;
   const commitSha = options.commitSha?.trim();
+  let consecutiveFailures = 0;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    let { res } = await fetchDeployments(projectId, teamId, cfg.vercelToken);
-
-    if (res.status === 403 && teamId && !teamId.startsWith("team_")) {
-      ({ res } = await fetchDeployments(projectId, undefined, cfg.vercelToken));
+    let res: Response;
+    try {
+      ({ res } = await fetchDeployments(projectId, teamId, cfg.vercelToken));
+      if (res.status === 403 && teamId && !teamId.startsWith("team_")) {
+        ({ res } = await fetchDeployments(projectId, undefined, cfg.vercelToken));
+      }
+    } catch (e) {
+      consecutiveFailures += 1;
+      console.warn("[vercel] deployments poll network error", attempt + 1, consecutiveFailures, e);
+      if (consecutiveFailures >= VERCEL_POLL_MAX_CONSECUTIVE_FAILURES) {
+        return { status: "unavailable", note: "vercel_unreachable", retryable: true };
+      }
+      await options.onPoll?.({ attempt });
+      await sleep(options.delayMs ?? vercelDeployPollDelayMs(attempt));
+      continue;
     }
 
     if (!res.ok) {
       const err = await res.text();
       if (res.status === 403) {
+        console.error("[vercel] deployments list 403", teamId, err.slice(0, 300));
         return {
           status: "unavailable",
-          note: `${vercel403Help(teamId)} Raw: ${err.slice(0, 200)}`,
+          note: "vercel_forbidden",
+          retryable: false,
         };
       }
-      throw new Error(`Vercel API error (${res.status}): ${err}`);
+      consecutiveFailures += 1;
+      console.warn("[vercel] deployments poll HTTP error", res.status, attempt + 1, consecutiveFailures);
+      if (consecutiveFailures >= VERCEL_POLL_MAX_CONSECUTIVE_FAILURES) {
+        return { status: "unavailable", note: "vercel_unreachable", retryable: true };
+      }
+      await options.onPoll?.({ attempt });
+      await sleep(options.delayMs ?? vercelDeployPollDelayMs(attempt));
+      continue;
     }
+
+    consecutiveFailures = 0;
 
     const data = (await res.json()) as DeploymentsResponse;
     const relevant = data.deployments
@@ -430,11 +457,14 @@ export async function waitForDeployment(options: {
     await sleep(options.delayMs ?? vercelDeployPollDelayMs(attempt));
   }
 
+  const note = commitSha
+    ? `No READY deployment found for commit ${commitSha.slice(0, 7)} in time.`
+    : "No new READY deployment appeared in time.";
+  console.warn("[vercel] deployment poll timed out", projectId, note);
   return {
     status: "timeout",
-    note: commitSha
-      ? `No READY deployment found for commit ${commitSha.slice(0, 7)} in time.`
-      : "No new READY deployment appeared in time.",
+    note,
     commitSha,
+    retryable: true,
   };
 }
