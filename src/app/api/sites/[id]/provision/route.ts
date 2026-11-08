@@ -19,6 +19,7 @@ export async function POST(_req: Request, { params }: Params) {
       where: { siteId: id },
       data: {
         provisioningError: null,
+        provisioningAttempts: 0,
         provisioningLeaseUntil: null,
         provisioningWorkerId: null,
       },

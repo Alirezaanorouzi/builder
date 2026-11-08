@@ -51,10 +51,13 @@ function parseRepoFullName(fullName: string): { owner: string; repo: string } {
   return { owner, repo };
 }
 
-/** Liara → api.vercel.com is slow; avoid starving link/create calls. */
 const PROVISIONING_GET_FETCH = { retries: 4, timeoutMs: 45_000 } as const;
-/** GitHub-linked project create can exceed 30s from restricted egress. */
-const PROVISIONING_CREATE_FETCH = { retries: 3, timeoutMs: 120_000 } as const;
+/** Shorter per-attempt timeout; POST is idempotent via 409 / GET-by-name recovery. */
+const PROVISIONING_CREATE_FETCH = {
+  retries: 5,
+  timeoutMs: 35_000,
+  freshConnection: true as const,
+} as const;
 const PROVISIONING_PATCH_FETCH = { retries: 3, timeoutMs: 45_000 } as const;
 
 async function timedProvisioning<T>(label: string, fn: () => Promise<T>): Promise<T> {
@@ -66,13 +69,15 @@ async function timedProvisioning<T>(label: string, fn: () => Promise<T>): Promis
   }
 }
 
-function productionUrlFromProject(project: {
-  name: string;
+export function productionUrlFromProject(project: {
+  name?: string;
   targets?: { production?: { url?: string } };
-}): string {
+}): string | null {
   const u = project.targets?.production?.url;
   if (u) return u.startsWith("http") ? u : `https://${u}`;
-  return `https://${project.name}.vercel.app`;
+  const name = project.name?.trim();
+  if (!name) return null;
+  return `https://${name}.vercel.app`;
 }
 
 export function vercelProjectLinksRepo(
@@ -99,6 +104,21 @@ export async function getVercelProjectDetails(
   return (await res.json()) as VercelProjectDetails;
 }
 
+/** GET /v9/projects/{name} — precise, no search-index lag. */
+export async function resolveVercelProjectByName(
+  projectName: string,
+  platform: ReturnType<typeof assertPlatformProvisioningConfig>
+): Promise<CreatedVercelProject | null> {
+  const details = await getVercelProjectDetails(projectName, platform);
+  if (!details) return null;
+  const url = productionUrlFromProject(details);
+  return {
+    id: details.id,
+    name: details.name,
+    productionUrl: url ?? `https://${details.name}.vercel.app`,
+  };
+}
+
 export async function findVercelProjectByName(
   projectName: string,
   platform: ReturnType<typeof assertPlatformProvisioningConfig>
@@ -114,10 +134,11 @@ export async function findVercelProjectByName(
   const data = (await res.json()) as { projects?: VercelProjectListItem[] };
   const exact = data.projects?.find((p) => p.name === projectName);
   if (!exact) return null;
+  const url = productionUrlFromProject(exact);
   return {
     id: exact.id,
     name: exact.name,
-    productionUrl: productionUrlFromProject(exact),
+    productionUrl: url ?? `https://${exact.name}.vercel.app`,
   };
 }
 
@@ -143,7 +164,9 @@ export async function enableVercelGitDeployments(
   );
   if (!res.ok) {
     const text = await res.text();
-    console.warn("[vercel] enable git deployments failed:", res.status, text.slice(0, 200));
+    throw new Error(
+      `Vercel enable git deployments failed (${res.status}): ${text.slice(0, 300)}`
+    );
   }
 }
 
@@ -200,6 +223,7 @@ function sleep(ms: number) {
 
 async function waitForProjectGitLink(
   projectId: string,
+  projectName: string,
   githubRepoFullName: string,
   platform: ReturnType<typeof assertPlatformProvisioningConfig>,
   linkHint?: VercelProjectLink | null
@@ -210,7 +234,7 @@ async function waitForProjectGitLink(
     if (hint && vercelProjectLinksRepo({ link: hint }, githubRepoFullName)) {
       return {
         id: projectId,
-        name: "",
+        name: projectName,
         link: hint,
       };
     }
@@ -259,8 +283,8 @@ export async function createVercelProjectForRepo(options: {
     );
 
     if (res.status === 409) {
-      const again = await timedProvisioning("vercel.findProject", () =>
-        findVercelProjectByName(options.projectName, platform)
+      const again = await timedProvisioning("vercel.resolveProject", () =>
+        resolveVercelProjectByName(options.projectName, platform)
       );
       if (!again) {
         throw new Error(`Vercel project name ${options.projectName} conflict but project not found`);
@@ -285,13 +309,14 @@ export async function createVercelProjectForRepo(options: {
       projectId = data.id;
       projectName = data.name;
       linkHint = data.link ?? null;
-      productionUrl = productionUrlFromProject(data);
+      const url = productionUrlFromProject(data);
+      productionUrl = url ?? `https://${data.name}.vercel.app`;
     }
   } catch (e) {
     if (!(e instanceof PlatformHttpError)) throw e;
     console.warn("[prov] vercel.createProject transport error; checking for existing project", e.href);
-    const again = await timedProvisioning("vercel.findProjectAfterTimeout", () =>
-      findVercelProjectByName(options.projectName, platform)
+    const again = await timedProvisioning("vercel.resolveProjectAfterTimeout", () =>
+      resolveVercelProjectByName(options.projectName, platform)
     );
     if (!again) throw e;
     projectId = again.id;
@@ -306,6 +331,7 @@ export async function createVercelProjectForRepo(options: {
 
   const details = await waitForProjectGitLink(
     projectId,
+    projectName,
     options.githubRepoFullName,
     platform,
     linkHint

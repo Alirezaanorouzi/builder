@@ -4,7 +4,10 @@ import type { ProvisioningStep } from "@prisma/client";
 import { transitionSiteStatus } from "@/services/site-status.service";
 import { recordBaselineCommit } from "@/services/preview-commit.service";
 import { createRepoFromTemplate, waitForDefaultBranchHeadSha } from "./github.service";
+import { PlatformHttpError } from "@/lib/platform-fetch";
 import { createVercelProjectForRepo } from "./vercel.service";
+
+const MAX_TRANSIENT_PROVISIONING_ATTEMPTS = 5;
 
 export function repoNameForSite(slug: string, siteId: string): string {
   const suffix = siteId.replace(/[^a-zA-Z0-9]/g, "").slice(-8);
@@ -23,11 +26,12 @@ async function setStep(
   });
 }
 
-async function releaseProvisioningLease(siteId: string) {
+async function releaseProvisioningLease(siteId: string, retryAfterMs = 0) {
   await prisma.siteResources.update({
     where: { siteId },
     data: {
-      provisioningLeaseUntil: null,
+      provisioningLeaseUntil:
+        retryAfterMs > 0 ? new Date(Date.now() + retryAfterMs) : null,
       provisioningWorkerId: null,
       updatedAt: new Date(),
     },
@@ -94,6 +98,8 @@ export async function runSiteProvisioning(siteId: string): Promise<void> {
   let githubRepoId = site.resources.githubRepoId;
   let branch = site.resources.githubDefaultBranch;
   const repoName = repoNameForSite(site.slug, site.id);
+  const provisionAttempt = site.resources.provisioningAttempts;
+  let retryLeaseMs = 0;
 
   try {
     if (
@@ -184,6 +190,18 @@ export async function runSiteProvisioning(siteId: string): Promise<void> {
       });
     }
   } catch (e) {
+    if (
+      e instanceof PlatformHttpError &&
+      provisionAttempt < MAX_TRANSIENT_PROVISIONING_ATTEMPTS
+    ) {
+      retryLeaseMs = provisionAttempt * 5_000;
+      console.warn(
+        `[prov] transient transport error on attempt ${provisionAttempt}, retry in ${retryLeaseMs}ms`,
+        siteId,
+        e.href
+      );
+      return;
+    }
     const cause =
       e && typeof e === "object" && "cause" in e ? String((e as { cause?: unknown }).cause ?? "") : "";
     const base = e instanceof Error ? e.message : "Provisioning failed";
@@ -195,7 +213,7 @@ export async function runSiteProvisioning(siteId: string): Promise<void> {
     await transitionSiteStatus(siteId, "failed", { message });
     throw e;
   } finally {
-    await releaseProvisioningLease(siteId);
+    await releaseProvisioningLease(siteId, retryLeaseMs);
   }
 }
 

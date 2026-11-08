@@ -7,6 +7,14 @@ const platformDispatcher = new Agent({
   keepAliveMaxTimeout: 60_000,
 });
 
+/** Avoid reusing a half-open socket on one-shot provisioning POSTs from restricted egress. */
+const freshConnectionDispatcher = new Agent({
+  connectTimeout: 20_000,
+  keepAliveTimeout: 1,
+  keepAliveMaxTimeout: 1,
+  connections: 4,
+});
+
 export class PlatformHttpError extends Error {
   readonly href: string;
   readonly attempts: number;
@@ -30,10 +38,11 @@ function backoffMs(attempt: number): number {
 export async function platformFetch(
   url: string | URL,
   init?: RequestInit,
-  options?: { retries?: number; timeoutMs?: number }
+  options?: { retries?: number; timeoutMs?: number; freshConnection?: boolean }
 ): Promise<Response> {
   const retries = Math.max(1, options?.retries ?? 4);
   const timeoutMs = Math.max(5_000, options?.timeoutMs ?? 45_000);
+  const dispatcher = options?.freshConnection ? freshConnectionDispatcher : platformDispatcher;
   let last: unknown;
   const href = typeof url === "string" ? url : url.href;
 
@@ -41,7 +50,7 @@ export async function platformFetch(
     try {
       const res = await undiciFetch(href, {
         ...init,
-        dispatcher: platformDispatcher,
+        dispatcher,
         signal: AbortSignal.timeout(timeoutMs),
       } as UndiciRequestInit);
       return res as unknown as Response;
