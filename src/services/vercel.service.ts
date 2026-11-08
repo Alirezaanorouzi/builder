@@ -1,6 +1,7 @@
 import { assertPlatformProvisioningConfig, getConfig } from "@/lib/config";
 import { hedgedPlatformGet, platformFetch } from "@/lib/platform-fetch";
 import {
+  VERCEL_DEPLOY_POLL_DEADLINE_MS,
   VERCEL_DEPLOY_POLL_MAX_ATTEMPTS,
   VERCEL_POLL_MAX_CONSECUTIVE_FAILURES,
   vercelDeployPollDelayMs,
@@ -399,6 +400,8 @@ export async function waitForDeployment(options: {
   commitSha?: string;
   sinceMs?: number;
   maxAttempts?: number;
+  /** Stop polling after this wall-clock time (default 5 minutes). */
+  deadlineMs?: number;
   /** Fixed delay between polls. When omitted, uses fast-then-backoff delays. */
   delayMs?: number;
   /** Called before each sleep so callers can heartbeat / report progress. */
@@ -409,10 +412,11 @@ export async function waitForDeployment(options: {
   const teamId = options.teamId ?? cfg.vercelTeamId;
   const sinceMs = options.sinceMs ?? Date.now() - 60_000;
   const maxAttempts = options.maxAttempts ?? VERCEL_DEPLOY_POLL_MAX_ATTEMPTS;
+  const deadline = Date.now() + (options.deadlineMs ?? VERCEL_DEPLOY_POLL_DEADLINE_MS);
   const commitSha = options.commitSha?.trim();
   let consecutiveFailures = 0;
 
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+  for (let attempt = 0; attempt < maxAttempts && Date.now() < deadline; attempt++) {
     let res: Response;
     try {
       ({ res } = await fetchDeployments(projectId, teamId));
@@ -457,7 +461,19 @@ export async function waitForDeployment(options: {
 
     consecutiveFailures = 0;
 
-    const data = (await res.json()) as DeploymentsResponse;
+    let data: DeploymentsResponse;
+    try {
+      data = (await res.json()) as DeploymentsResponse;
+    } catch (e) {
+      consecutiveFailures += 1;
+      console.warn("[vercel] deployments poll JSON parse failed", attempt + 1, e);
+      if (consecutiveFailures >= VERCEL_POLL_MAX_CONSECUTIVE_FAILURES) {
+        return { status: "unavailable", note: "vercel_unreachable", retryable: true };
+      }
+      await options.onPoll?.({ attempt });
+      await sleep(options.delayMs ?? vercelDeployPollDelayMs(attempt));
+      continue;
+    }
     const relevant = data.deployments
       .filter(
         (d) => deploymentCreatedAt(d) >= sinceMs - 120_000 && deploymentMatchesCommit(d, commitSha)

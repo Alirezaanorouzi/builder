@@ -3,6 +3,9 @@
 export const DEFERRED_DEPLOY_CONFIRMATION =
   "تغییرات اعمال شد. چند لحظه صبر کنید، بعد تب «پیش‌نمایش» را باز کنید یا دکمهٔ تازه‌سازی را بزنید تا نسخهٔ جدید را ببینید.";
 
+export const RESUME_DEPLOY_CONFIRMATION =
+  "ادامهٔ انتشار نسخهٔ جدید…";
+
 export const GENERIC_BUILD_FAILED =
   "مشکلی پیش آمد. لطفاً دوباره همان درخواست را بفرستید.";
 

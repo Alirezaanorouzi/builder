@@ -76,8 +76,9 @@ function mergeAbortSignals(...signals: AbortSignal[]): AbortSignal {
 }
 
 /**
- * Idempotent GET: two parallel attempts (second after hedgeMs). Only 2xx wins.
- * Losing attempts are aborted when a winner is found.
+ * Idempotent GET: two parallel attempts (second after hedgeMs).
+ * Losers are aborted once a winner settles; the winner body is buffered first so abort
+ * cannot break later `res.json()` on the returned Response.
  */
 export async function hedgedPlatformGet(
   primary: HedgedGetSpec,
@@ -88,16 +89,21 @@ export async function hedgedPlatformGet(
   const timeoutMs = options?.timeoutMs ?? 10_000;
   const controllers: AbortController[] = [];
 
-  const singleAttempt = (spec: HedgedGetSpec, userAbort: AbortSignal): Promise<Response> => {
+  const singleAttempt = async (spec: HedgedGetSpec, userAbort: AbortSignal): Promise<Response> => {
     const href = spec.url;
-    return undiciFetch(href, {
+    const res = await undiciFetch(href, {
       ...spec.init,
       dispatcher: platformDispatcher,
       signal: mergeAbortSignals(userAbort, AbortSignal.timeout(timeoutMs)),
-    } as UndiciRequestInit).then((res) => {
-      const r = res as unknown as Response;
-      if (r.ok) return r;
-      return Promise.reject(new Error(`HTTP ${r.status} ${href}`));
+    } as UndiciRequestInit);
+    const r = res as unknown as Response;
+    if (r.status >= 500 || r.status === 429) {
+      throw new Error(`HTTP ${r.status} ${href}`);
+    }
+    const body = await r.text();
+    return new Response(body, {
+      status: r.status,
+      headers: { "content-type": r.headers.get("content-type") ?? "application/json" },
     });
   };
 

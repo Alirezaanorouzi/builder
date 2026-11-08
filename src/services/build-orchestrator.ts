@@ -19,11 +19,12 @@ import { setSiteCursorAgentId } from "@/lib/sites";
 import { getDefaultBranchHeadSha } from "@/services/github.service";
 import { waitForDeployment } from "@/services/vercel.service";
 import { recordProductionCommit } from "@/services/preview-commit.service";
-import { vercelDeployPollOptions } from "@/lib/vercel-deploy-poll";
+import { MAX_DEPLOY_CONFIRM_RECOVERIES, vercelDeployPollOptions } from "@/lib/vercel-deploy-poll";
 import {
   DEFERRED_DEPLOY_CONFIRMATION,
   DEPLOY_NOT_READY_IN_TIME,
   GENERIC_BUILD_FAILED,
+  RESUME_DEPLOY_CONFIRMATION,
   VERCEL_DEPLOY_AUTH_ISSUE,
   VERCEL_BUILD_FAILED,
 } from "@/lib/build-user-messages";
@@ -44,7 +45,26 @@ function isRetryableDeployOutcome(deploy: DeploymentResult): boolean {
   return false;
 }
 
+async function countDeferredDeployConfirmations(buildRunId: string): Promise<number> {
+  return prisma.buildEvent.count({
+    where: {
+      buildRunId,
+      eventType: "status",
+      message: DEFERRED_DEPLOY_CONFIRMATION,
+    },
+  });
+}
+
 async function deferDeployConfirmation(buildRunId: string): Promise<RunOutcome> {
+  const priorDefers = await countDeferredDeployConfirmations(buildRunId);
+  if (priorDefers >= MAX_DEPLOY_CONFIRM_RECOVERIES) {
+    publishBuildStream(buildRunId, "error", { message: DEPLOY_NOT_READY_IN_TIME });
+    const run = await updateBuildRunStatus(buildRunId, "failed", {
+      errorMessage: DEPLOY_NOT_READY_IN_TIME,
+      finishedAt: new Date(),
+    });
+    return { run, previewChanged: false };
+  }
   publishBuildStream(buildRunId, "status", { message: DEFERRED_DEPLOY_CONFIRMATION });
   await touchBuildRun(buildRunId);
   const run = await prisma.buildRun.findUnique({ where: { id: buildRunId } });
@@ -206,9 +226,18 @@ async function withRunLifecycle(
       select: { status: true },
     });
     if (current?.status === "pushing" || current?.status === "deploying") {
-      publishBuildStream(buildRunId, "status", { message: DEFERRED_DEPLOY_CONFIRMATION });
-      await touchBuildRun(buildRunId);
-      skipTerminalDone = true;
+      const defers = await countDeferredDeployConfirmations(buildRunId);
+      if (defers >= MAX_DEPLOY_CONFIRM_RECOVERIES) {
+        publishBuildStream(buildRunId, "error", { message: DEPLOY_NOT_READY_IN_TIME });
+        terminalStatus = await updateBuildRunStatus(buildRunId, "failed", {
+          errorMessage: DEPLOY_NOT_READY_IN_TIME,
+          finishedAt: new Date(),
+        });
+      } else {
+        publishBuildStream(buildRunId, "status", { message: DEFERRED_DEPLOY_CONFIRMATION });
+        await touchBuildRun(buildRunId);
+        skipTerminalDone = true;
+      }
     } else {
       publishBuildStream(buildRunId, "error", { message: GENERIC_BUILD_FAILED });
       try {
@@ -315,14 +344,18 @@ export async function recoverBuildRun(buildRunId: string): Promise<void> {
     const agentId = run.site.resources?.cursorAgentId;
     const runId = run.engineRunId;
 
+    if (run.status === "pushing" || run.status === "deploying") {
+      const defers = await countDeferredDeployConfirmations(buildRunId);
+      if (defers >= MAX_DEPLOY_CONFIRM_RECOVERIES) {
+        return failRun(buildRunId, DEPLOY_NOT_READY_IN_TIME);
+      }
+      publishBuildStream(buildRunId, "status", { message: RESUME_DEPLOY_CONFIRMATION });
+      return confirmDeploymentForRun({ buildRunId, siteId: run.site.id, tenant });
+    }
+
     publishBuildStream(buildRunId, "status", {
       message: "The worker restarted; resuming where the agent left off…",
     });
-
-    // The agent was already done; only the publish step was interrupted.
-    if (run.status === "pushing" || run.status === "deploying") {
-      return confirmDeploymentForRun({ buildRunId, siteId: run.site.id, tenant });
-    }
 
     if (!agentId || !runId) {
       return failRun(buildRunId, "Cannot recover: the agent run id was not saved.");
