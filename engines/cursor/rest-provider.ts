@@ -190,7 +190,14 @@ export const cursorRestEngineProvider: CodingEngineProvider = {
       return false;
     });
 
-    const terminal = await waitUntilRunTerminal(agentId, runId);
+    const terminalPromise = waitUntilRunTerminal(agentId, runId);
+    const terminal = await Promise.race([
+      terminalPromise,
+      streamPromise.then((finished): Promise<CursorRunInfo | null> | CursorRunInfo => {
+        if (finished) return { status: "FINISHED" } as CursorRunInfo;
+        return terminalPromise;
+      }),
+    ]);
     await Promise.race([streamPromise, sleep(STREAM_DRAIN_GRACE_MS)]);
 
     if (terminal?.status === "FINISHED") {

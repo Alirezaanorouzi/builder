@@ -11,6 +11,7 @@ Host the **builder** Next.js app on [Liara](https://liara.ir) with Liara Postgre
    - `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL` — public URL, e.g. `https://builder1.liara.run`
    - **Cursor:** either **`CURSOR_API_KEY`** (if Cursor allows your egress), or **[`gateway/`](../gateway/) on Vercel** with  
      **`CURSOR_TRANSPORT=gateway`**, **`ENGINE_GATEWAY_URL`**, **`ENGINE_GATEWAY_TOKEN`** and **no** `CURSOR_API_KEY` on Liara
+   - **Deploy poll latency:** gateway env **`VERCEL_TOKEN`** + **`VERCEL_TEAM_ID`**; Liara **`ENGINE_GATEWAY_URL`** + **`ENGINE_GATEWAY_TOKEN_VERCEL`** (or shared `ENGINE_GATEWAY_TOKEN`). Liara keeps **`VERCEL_TOKEN`** for provisioning. Optional **`VERCEL_DEPLOYMENTS_TRANSPORT=direct`** to debug without gateway.
    - `TEMPLATE_REPO_URL`, `PLATFORM_GITHUB_TOKEN`, `GITHUB_REPO_OWNER`
    - `VERCEL_TOKEN`, `VERCEL_TEAM_ID`
    - **`INLINE_BUILD_WORKER`** — defaults to **on** (polls GitHub/Vercel provisioning + builds in-process). Set `INLINE_BUILD_WORKER=0` on the web app only if you run a **separate** worker Liara app (`npm run worker`).

@@ -29,7 +29,6 @@ import {
 } from "@/lib/build-user-messages";
 import type { DeploymentResult } from "@/services/vercel.service";
 import type { TenantContext } from "@engines/types";
-
 type BuildRunRow = NonNullable<Awaited<ReturnType<typeof updateBuildRunStatus>>>;
 
 type RunOutcome = {
@@ -131,7 +130,10 @@ export async function confirmDeploymentForRun(options: {
       await touchBuildRun(buildRunId);
       await new Promise((r) => setTimeout(r, 6_000 * round));
     }
-    deploy = await waitForDeployment(deployPoll);
+    deploy = await waitForDeployment({
+      ...deployPoll,
+      onPoll: () => touchBuildRun(buildRunId),
+    });
     if (deploy.status === "ready") break;
     if (!isRetryableDeployOutcome(deploy)) break;
   }

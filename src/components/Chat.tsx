@@ -386,10 +386,18 @@ export function Chat() {
   const handleSsePayload = useCallback(
     (
       buildRunId: string,
-      kind: RawActivityInput["kind"] | "assistant" | "agent_done" | "done" | "phase",
+      kind: RawActivityInput["kind"] | "assistant" | "agent_done" | "done" | "phase" | "preview",
       data: SsePayload
     ) => {
       const eventId = data.eventId ?? `${kind}-${Date.now()}`;
+
+      if (kind === "preview") {
+        if (data.url) setPreviewUrl(data.url);
+        setPreviewPublishing(false);
+        setAwaitingDeployConfirm(false);
+        refreshPreview();
+        return;
+      }
 
       if (kind === "assistant") {
         if (data.text) appendAssistantChunk(buildRunId, eventId, data.text);
@@ -474,6 +482,7 @@ export function Chat() {
       getSeenSet,
       ingestActivity,
       loadMe,
+      refreshPreview,
     ]
   );
 
@@ -513,6 +522,7 @@ export function Chat() {
       bind("activity", "activity");
       bind("assistant", "assistant");
       bind("phase", "phase");
+      bind("preview", "preview");
       bind("agent_done", "agent_done");
       bind("done", "done");
 

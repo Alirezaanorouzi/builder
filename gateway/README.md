@@ -1,19 +1,44 @@
-# Cursor agent gateway (Vercel)
+# Agent + Vercel deploy gateway (Vercel)
 
-<!-- Vercel: connect Git `Alirezaanorouzi/builder-cursor-gateway`, branch `main`. -->
-
-Small **Next.js 15 App Router** proxy: your builder (e.g. on Liara) calls this with `Authorization: Bearer ENGINE_GATEWAY_TOKEN`, and the gateway forwards **only** allow-listed paths to `https://api.cursor.com` using `CURSOR_API_KEY`.
+Small **Next.js 15 App Router** proxy: your builder (e.g. on Liara) calls this with shared secrets; the gateway forwards **only** allow-listed paths upstream.
 
 ## Deploy
 
 1. Create a Vercel project with **root directory** `gateway` (or deploy this folder only).
 2. Set env on the Vercel project:
    - `CURSOR_API_KEY` — Cursor API key (stays on Vercel only)
-   - `ENGINE_GATEWAY_TOKEN` — long random secret; copy to the builder as `ENGINE_GATEWAY_TOKEN`
-3. Region is pinned in `vercel.json` (`fra1` by default). Change if needed.
-4. Production URL will look like `https://your-project.vercel.app`. The builder uses **`https://your-project.vercel.app`** as `ENGINE_GATEWAY_URL` (do not add `/api/cursor`; the app appends that).
+   - `ENGINE_GATEWAY_TOKEN` — long random secret; copy to the builder as `ENGINE_GATEWAY_TOKEN` (Cursor routes)
+   - `ENGINE_GATEWAY_TOKEN_VERCEL` — **recommended** separate secret for Vercel routes; builder sets the same value (falls back to `ENGINE_GATEWAY_TOKEN` if unset)
+   - `VERCEL_TOKEN` — **dedicated** token for this project only (do not reuse Liara’s full admin token; set expiration in Vercel)
+   - `VERCEL_TEAM_ID` — `team_…` from team settings (required for deployments list; **not** accepted from clients)
+3. Region is pinned in `vercel.json` (`fra1` by default).
+4. Builder uses **`https://your-project.vercel.app`** as `ENGINE_GATEWAY_URL` (no path suffix).
+
+## Allow-listed routes
+
+### Cursor (`/api/cursor/...`)
+
+Same as before: create agent, follow-up run, get run, run stream, cancel. Auth: `Bearer ENGINE_GATEWAY_TOKEN`.
+
+### Vercel deployments (`GET /api/vercel/v6/deployments`)
+
+- **Methods:** GET only
+- **Query (client):** `projectId` (required, `prj_…`), `limit` (1–100, default 40). **Reject `teamId` from client** — gateway adds `teamId` from `VERCEL_TEAM_ID`.
+- **Upstream:** `api.vercel.com` with **8s** timeout
+- **Response:** filtered deployment list (uid, url, states, created, `meta.githubCommitSha` only); `Cache-Control: no-store`
+- **Auth:** `Bearer ENGINE_GATEWAY_TOKEN_VERCEL` or `ENGINE_GATEWAY_TOKEN`
 
 ## Security
 
-- Do not commit tokens. Treat a leaked `ENGINE_GATEWAY_TOKEN` like a leaked API key (rotate both).
-- Only these Cursor paths are proxied: create agent, follow-up run, get run, run stream, cancel.
+- Rotate tokens if leaked (`ENGINE_GATEWAY_*` and gateway `VERCEL_TOKEN` independently).
+- A caller token leak still allows listing deployments for any `prj_…` visible to the gateway token — use split tokens and a narrow Vercel token.
+- Do not commit secrets.
+
+## Probe
+
+From repo root with `.env.local`:
+
+```bash
+npx tsx scripts/probe-gateway.ts
+npx tsx scripts/probe-gateway.ts --vercel-deployments
+```

@@ -4,11 +4,11 @@ export const VERCEL_DEPLOY_POLL_MAX_ATTEMPTS = 20;
 /** Transient list-API failures in a row before treating Vercel as unreachable (same poll window). */
 export const VERCEL_POLL_MAX_CONSECUTIVE_FAILURES = 6;
 
-/** Poll fast while the build is young, then back off (Vercel builds typically take 30-120s). */
+/** First ~30s after confirm: 3s cadence; then back off as build may still be young. */
 export function vercelDeployPollDelayMs(attempt: number): number {
-  if (attempt < 6) return 10_000;
-  if (attempt < 12) return 15_000;
-  return 20_000;
+  if (attempt < 10) return 3_000;
+  if (attempt < 24) return 8_000;
+  return 15_000;
 }
 
 /** Upper bound of a full poll window (server side cap). */

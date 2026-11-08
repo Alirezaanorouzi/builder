@@ -124,11 +124,30 @@ export function getCursorTransport(): CursorTransportMode {
   return "direct";
 }
 
+/** Deploy list polls: direct api.vercel.com or gateway GET v6/deployments only. */
+export type VercelDeploymentsTransport = "direct" | "gateway";
+
+export function getVercelDeploymentsTransport(): VercelDeploymentsTransport {
+  const raw = process.env.VERCEL_DEPLOYMENTS_TRANSPORT?.trim().toLowerCase();
+  if (raw === "gateway" || raw === "direct") return raw;
+
+  const gatewayUrl = process.env.ENGINE_GATEWAY_URL?.trim() ?? "";
+  const token =
+    process.env.ENGINE_GATEWAY_TOKEN_VERCEL?.trim() ||
+    process.env.ENGINE_GATEWAY_TOKEN?.trim() ||
+    "";
+  if (gatewayUrl && token) return "gateway";
+  return "direct";
+}
+
 export function getConfig() {
   const cursorTransport = getCursorTransport();
   const cursorApiKey = process.env.CURSOR_API_KEY?.trim() ?? "";
   const engineGatewayUrl = process.env.ENGINE_GATEWAY_URL?.trim() ?? "";
   const engineGatewayToken = process.env.ENGINE_GATEWAY_TOKEN?.trim() ?? "";
+  const engineGatewayTokenVercel =
+    process.env.ENGINE_GATEWAY_TOKEN_VERCEL?.trim() || engineGatewayToken;
+  const vercelDeploymentsTransport = getVercelDeploymentsTransport();
   const templateRepoUrl = process.env.TEMPLATE_REPO_URL?.trim() ?? "";
   const templateRepoRef = process.env.TEMPLATE_REPO_REF?.trim() || "main";
   const vercelToken = process.env.VERCEL_TOKEN?.trim() ?? "";
@@ -144,12 +163,21 @@ export function getConfig() {
     cursorApiBase = base.endsWith("/api/cursor") ? base : `${base}/api/cursor`;
   }
 
+  let vercelDeploymentsApiBase = "https://api.vercel.com";
+  if (vercelDeploymentsTransport === "gateway") {
+    const base = engineGatewayUrl.replace(/\/$/, "");
+    vercelDeploymentsApiBase = base.endsWith("/api/vercel") ? base : `${base}/api/vercel`;
+  }
+
   return {
     codingEngine: getCodingEngineId(),
     cursorTransport,
     cursorApiKey,
     engineGatewayUrl,
     engineGatewayToken,
+    engineGatewayTokenVercel,
+    vercelDeploymentsTransport,
+    vercelDeploymentsApiBase,
     templateRepoUrl,
     templateRepoRef,
     vercelToken,

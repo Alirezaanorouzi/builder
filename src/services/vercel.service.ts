@@ -1,5 +1,5 @@
 import { assertPlatformProvisioningConfig, getConfig } from "@/lib/config";
-import { platformFetch } from "@/lib/platform-fetch";
+import { hedgedPlatformGet, platformFetch } from "@/lib/platform-fetch";
 import {
   VERCEL_DEPLOY_POLL_MAX_ATTEMPTS,
   VERCEL_POLL_MAX_CONSECUTIVE_FAILURES,
@@ -256,8 +256,13 @@ interface VercelDeployment {
   url: string;
   state: string;
   readyState?: string;
-  createdAt: number;
+  createdAt?: number;
+  created?: number;
   meta?: { githubCommitSha?: string };
+}
+
+function deploymentCreatedAt(d: VercelDeployment): number {
+  return d.createdAt ?? d.created ?? 0;
 }
 
 interface DeploymentsResponse {
@@ -293,15 +298,38 @@ function vercel403Help(teamId: string | undefined): string {
 async function fetchDeployments(
   projectId: string,
   teamId: string | undefined,
-  token: string,
-  limit = 20
-) {
-  const teamQuery = deploymentsTeamQuery(teamId);
-  const url = `https://api.vercel.com/v6/deployments?projectId=${encodeURIComponent(projectId)}&limit=${limit}${teamQuery}`;
-  const res = await platformFetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
+  limit = 40
+): Promise<{ res: Response; url: string }> {
+  const cfg = getConfig();
+  const q = new URLSearchParams({
+    projectId,
+    limit: String(limit),
   });
-  return { res, url };
+
+  if (cfg.vercelDeploymentsTransport === "gateway") {
+    const base = cfg.vercelDeploymentsApiBase.replace(/\/$/, "");
+    const gatewayUrl = `${base}/v6/deployments?${q}`;
+    const gatewayInit: RequestInit = {
+      headers: { Authorization: `Bearer ${cfg.engineGatewayTokenVercel}` },
+    };
+    const teamQuery = deploymentsTeamQuery(teamId);
+    const directUrl = `https://api.vercel.com/v6/deployments?${q}${teamQuery}`;
+    const directInit: RequestInit = {
+      headers: { Authorization: `Bearer ${cfg.vercelToken}` },
+    };
+    const secondary = cfg.vercelToken ? { url: directUrl, init: directInit } : null;
+    const res = await hedgedPlatformGet({ url: gatewayUrl, init: gatewayInit }, secondary);
+    return { res, url: gatewayUrl };
+  }
+
+  const teamQuery = deploymentsTeamQuery(teamId);
+  const directUrl = `https://api.vercel.com/v6/deployments?${q}${teamQuery}`;
+  const directSpec = {
+    url: directUrl,
+    init: { headers: { Authorization: `Bearer ${cfg.vercelToken}` } } as RequestInit,
+  };
+  const res = await hedgedPlatformGet(directSpec, directSpec);
+  return { res, url: directUrl };
 }
 
 function readyDeploymentsWithCommit(deployments: VercelDeployment[]): VercelDeployment[] {
@@ -319,15 +347,15 @@ export async function fetchReadyDeploymentCommitRange(options: {
 }): Promise<{ oldest?: string; newest?: string }> {
   const cfg = getConfig();
   const limit = options.limit ?? 100;
-  let { res } = await fetchDeployments(
-    options.projectId,
-    options.teamId ?? cfg.vercelTeamId,
-    cfg.vercelToken,
-    limit
-  );
+  let { res } = await fetchDeployments(options.projectId, options.teamId ?? cfg.vercelTeamId, limit);
 
-  if (res.status === 403 && options.teamId && !options.teamId.startsWith("team_")) {
-    ({ res } = await fetchDeployments(options.projectId, undefined, cfg.vercelToken, limit));
+  if (
+    cfg.vercelDeploymentsTransport === "direct" &&
+    res.status === 403 &&
+    options.teamId &&
+    !options.teamId.startsWith("team_")
+  ) {
+    ({ res } = await fetchDeployments(options.projectId, undefined, limit));
   }
 
   if (!res.ok) {
@@ -336,7 +364,7 @@ export async function fetchReadyDeploymentCommitRange(options: {
 
   const data = (await res.json()) as DeploymentsResponse;
   const ready = readyDeploymentsWithCommit(data.deployments).sort(
-    (a, b) => a.createdAt - b.createdAt
+    (a, b) => deploymentCreatedAt(a) - deploymentCreatedAt(b)
   );
   if (ready.length === 0) return {};
 
@@ -387,9 +415,14 @@ export async function waitForDeployment(options: {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     let res: Response;
     try {
-      ({ res } = await fetchDeployments(projectId, teamId, cfg.vercelToken));
-      if (res.status === 403 && teamId && !teamId.startsWith("team_")) {
-        ({ res } = await fetchDeployments(projectId, undefined, cfg.vercelToken));
+      ({ res } = await fetchDeployments(projectId, teamId));
+      if (
+        cfg.vercelDeploymentsTransport === "direct" &&
+        res.status === 403 &&
+        teamId &&
+        !teamId.startsWith("team_")
+      ) {
+        ({ res } = await fetchDeployments(projectId, undefined));
       }
     } catch (e) {
       consecutiveFailures += 1;
@@ -426,8 +459,10 @@ export async function waitForDeployment(options: {
 
     const data = (await res.json()) as DeploymentsResponse;
     const relevant = data.deployments
-      .filter((d) => d.createdAt >= sinceMs - 120_000 && deploymentMatchesCommit(d, commitSha))
-      .sort((a, b) => b.createdAt - a.createdAt);
+      .filter(
+        (d) => deploymentCreatedAt(d) >= sinceMs - 120_000 && deploymentMatchesCommit(d, commitSha)
+      )
+      .sort((a, b) => deploymentCreatedAt(b) - deploymentCreatedAt(a));
 
     const ready = relevant.find((d) => (d.readyState ?? d.state) === "READY");
     if (ready?.url) {
