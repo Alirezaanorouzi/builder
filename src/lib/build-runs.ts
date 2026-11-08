@@ -32,6 +32,12 @@ export const HEARTBEAT_INTERVAL_MS = 15_000;
 /** No heartbeat for this long => the worker that owned the run is gone; recover it. */
 export const HEARTBEAT_STALE_MS = 90_000;
 
+/**
+ * Deferred deploy confirmation: worker stopped heartbeating but Vercel may already be READY.
+ * Retry sooner than agent-recovery stale (must exceed max Vercel poll gap ~20s).
+ */
+export const DEPLOY_CONFIRM_RETRY_STALE_MS = 30_000;
+
 /** Never re-queue a run older than this (avoids crash loops on a poisoned job). */
 const REQUEUE_MAX_AGE_MS = 30 * 60 * 1000;
 
@@ -142,11 +148,31 @@ export async function requeueOrphanedBuildRuns(): Promise<number> {
  * Atomically claim ONE run whose worker died after the agent run started
  * (has `engineRunId`, stale heartbeat). The claim bumps `updatedAt`, so only one worker wins.
  */
+/** Re-attach to a run stuck in publish after defer (short stale window). */
+export async function claimStaleDeployConfirmationRun() {
+  const staleBefore = new Date(Date.now() - DEPLOY_CONFIRM_RETRY_STALE_MS);
+  const candidate = await prisma.buildRun.findFirst({
+    where: {
+      status: { in: ["pushing", "deploying"] },
+      engineRunId: { not: null },
+      updatedAt: { lt: staleBefore },
+    },
+    orderBy: { updatedAt: "asc" },
+  });
+  if (!candidate) return null;
+
+  const claimed = await prisma.buildRun.updateMany({
+    where: { id: candidate.id, status: candidate.status, updatedAt: candidate.updatedAt },
+    data: { updatedAt: new Date() },
+  });
+  return claimed.count === 1 ? candidate : null;
+}
+
 export async function claimStaleBuildRunForRecovery() {
   const staleBefore = new Date(Date.now() - HEARTBEAT_STALE_MS);
   const candidate = await prisma.buildRun.findFirst({
     where: {
-      status: { in: ["running", "pushing", "deploying"] },
+      status: { in: ["running"] },
       engineRunId: { not: null },
       updatedAt: { lt: staleBefore },
     },

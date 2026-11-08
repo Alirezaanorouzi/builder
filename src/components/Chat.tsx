@@ -57,6 +57,7 @@ type SiteSummary = {
   provisioningStep?: string | null;
   provisioningError?: string | null;
   productionUrl?: string | null;
+  productionCommitSha?: string | null;
 };
 
 type SsePayload = {
@@ -150,6 +151,7 @@ export function Chat() {
   const [buildWaitStartedAt, setBuildWaitStartedAt] = useState<number>(() => Date.now());
   const [previewRefreshKey, setPreviewRefreshKey] = useState(0);
   const [previewPublishing, setPreviewPublishing] = useState(false);
+  const [awaitingDeployConfirm, setAwaitingDeployConfirm] = useState(false);
   const [publishWaitStartedAt, setPublishWaitStartedAt] = useState<number>(() => Date.now());
   const bottomRef = useRef<HTMLDivElement>(null);
   const accountRef = useRef<HTMLDivElement>(null);
@@ -159,6 +161,8 @@ export function Chat() {
   /** Build run whose agent finished successfully (a later deploy failure must still be shown). */
   const agentSucceededRunRef = useRef<string | null>(null);
   const historyLoadedForSiteRef = useRef<string | null>(null);
+  const productionShaBeforeDeployRef = useRef<string | null>(null);
+  const lastSseSeqRef = useRef<string | null>(null);
 
   const getSeenSet = useCallback((buildRunId: string) => {
     let set = seenEventIdsRef.current.get(buildRunId);
@@ -300,6 +304,9 @@ export function Chat() {
         } else {
           setPreviewUrl(null);
         }
+        if (active.productionCommitSha != null) {
+          productionShaBeforeDeployRef.current ??= active.productionCommitSha;
+        }
       }
       return active;
     } finally {
@@ -307,11 +314,14 @@ export function Chat() {
     }
   }, []);
 
-  const closeStream = useCallback(() => {
-    setPreviewPublishing(false);
+  const closeStream = useCallback((keepPreviewWait = false) => {
+    if (!keepPreviewWait) {
+      setPreviewPublishing(false);
+      setAwaitingDeployConfirm(false);
+    }
     esRef.current?.close();
     esRef.current = null;
-    activeBuildRunRef.current = null;
+    if (!keepPreviewWait) activeBuildRunRef.current = null;
   }, []);
 
   const appendError = useCallback((text: string) => {
@@ -337,9 +347,12 @@ export function Chat() {
       } else {
         agentSucceededRunRef.current = buildRunId;
         setBusy(false);
+        void loadMe().then((site) => {
+          productionShaBeforeDeployRef.current = site?.productionCommitSha ?? null;
+        });
       }
     },
-    [finishBuildRun]
+    [finishBuildRun, loadMe]
   );
 
   /** Terminal state of the whole run (agent + deployment confirmation). */
@@ -355,10 +368,14 @@ export function Chat() {
         appendError(data.errorMessage);
       }
       setPreviewPublishing(false);
+      setAwaitingDeployConfirm(false);
       setBusy(false);
       if (!failed) {
         // Single refresh instead of polling: the server confirmed the deployment before `done`.
         void loadMe().then((site) => {
+          if (site?.productionCommitSha != null) {
+            productionShaBeforeDeployRef.current = site.productionCommitSha;
+          }
           if (site?.productionUrl && data.previewChanged !== false) refreshPreview();
         });
       }
@@ -383,6 +400,11 @@ export function Chat() {
         if (data.status === "deploying") {
           setPublishWaitStartedAt(Date.now());
           setPreviewPublishing(true);
+          void loadMe().then((site) => {
+            if (site?.productionCommitSha != null) {
+              productionShaBeforeDeployRef.current = site.productionCommitSha;
+            }
+          });
         }
         return;
       }
@@ -427,9 +449,8 @@ export function Chat() {
           agentSucceededRunRef.current === buildRunId &&
           data.message === DEFERRED_DEPLOY_CONFIRMATION
         ) {
-          setPreviewPublishing(false);
-          setBusy(false);
-          agentSucceededRunRef.current = null;
+          setPreviewPublishing(true);
+          setAwaitingDeployConfirm(true);
         }
         ingestActivity(buildRunId, {
           eventId,
@@ -452,26 +473,35 @@ export function Chat() {
       finishBuildRun,
       getSeenSet,
       ingestActivity,
+      loadMe,
     ]
   );
 
   const startStream = useCallback(
-    (buildRunId: string) => {
-      closeStream();
+    (buildRunId: string, resumeFromSeq?: string | null) => {
+      closeStream(Boolean(resumeFromSeq));
       activeBuildRunRef.current = buildRunId;
       localStorage.setItem(BUILD_RUN_KEY, buildRunId);
-      agentSucceededRunRef.current = null;
-      setBuildWaitStartedAt(Date.now());
+      if (!resumeFromSeq) {
+        agentSucceededRunRef.current = null;
+        setBuildWaitStartedAt(Date.now());
+      }
       ensureActivityBlock(buildRunId);
 
       const params = new URLSearchParams({ buildRunId });
+      const lastSeq = resumeFromSeq ?? lastSseSeqRef.current;
+      if (lastSeq && /^\d+$/.test(lastSeq)) {
+        params.set("lastEventId", lastSeq);
+      }
       const es = new EventSource(`/api/chat/stream?${params}`);
       esRef.current = es;
 
       const bind = (eventName: string, kind: Parameters<typeof handleSsePayload>[1]) => {
         es.addEventListener(eventName, (ev) => {
           try {
-            const data = JSON.parse((ev as MessageEvent).data) as SsePayload;
+            const mev = ev as MessageEvent;
+            if (mev.lastEventId) lastSseSeqRef.current = mev.lastEventId;
+            const data = JSON.parse(mev.data) as SsePayload;
             handleSsePayload(buildRunId, kind, data);
           } catch {
             /* ignore malformed */
@@ -506,13 +536,31 @@ export function Chat() {
 
       es.onerror = () => {
         if (es.readyState === EventSource.CLOSED) return;
+        const shouldResume =
+          previewPublishing || awaitingDeployConfirm || Boolean(agentSucceededRunRef.current);
+        closeStream(shouldResume);
+        if (shouldResume && activeBuildRunRef.current === buildRunId) {
+          window.setTimeout(() => {
+            if (activeBuildRunRef.current === buildRunId) {
+              startStream(buildRunId, lastSseSeqRef.current);
+            }
+          }, 2000);
+          return;
+        }
         appendError("جریان قطع شد");
         finishBuildRun(buildRunId, { status: "failed", errorMessage: "Stream disconnected" });
         setBusy(false);
-        closeStream();
       };
     },
-    [appendError, closeStream, ensureActivityBlock, finishBuildRun, handleSsePayload]
+    [
+      appendError,
+      awaitingDeployConfirm,
+      closeStream,
+      ensureActivityBlock,
+      finishBuildRun,
+      handleSsePayload,
+      previewPublishing,
+    ]
   );
 
   useEffect(() => {
@@ -573,6 +621,24 @@ export function Chat() {
     }, 6000);
     return () => window.clearInterval(timer);
   }, [siteStatus, loadMe]);
+
+  useEffect(() => {
+    if (!awaitingDeployConfirm || !siteId) return;
+    const tick = async () => {
+      const site = await loadMe();
+      if (!site?.productionCommitSha) return;
+      const before = productionShaBeforeDeployRef.current;
+      if (before && site.productionCommitSha !== before) {
+        setAwaitingDeployConfirm(false);
+        setPreviewPublishing(false);
+        productionShaBeforeDeployRef.current = site.productionCommitSha;
+        if (site.productionUrl) refreshPreview();
+      }
+    };
+    void tick();
+    const timer = window.setInterval(() => void tick(), 6000);
+    return () => window.clearInterval(timer);
+  }, [awaitingDeployConfirm, loadMe, refreshPreview, siteId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });

@@ -96,6 +96,13 @@ async function waitUntilRunTerminal(agentId: string, runId: string): Promise<Cur
   }
 }
 
+/** Do not block deploy on a long-lived Cursor SSE after the run is already terminal. */
+const STREAM_DRAIN_GRACE_MS = 4_000;
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 export const cursorRestEngineProvider: CodingEngineProvider = {
   id: "cursor",
 
@@ -183,9 +190,8 @@ export const cursorRestEngineProvider: CodingEngineProvider = {
       return false;
     });
 
-    const terminalPromise = waitUntilRunTerminal(agentId, runId);
-
-    const [, terminal] = await Promise.all([streamPromise, terminalPromise]);
+    const terminal = await waitUntilRunTerminal(agentId, runId);
+    await Promise.race([streamPromise, sleep(STREAM_DRAIN_GRACE_MS)]);
 
     if (terminal?.status === "FINISHED") {
       if (!agentDoneSent) emitAgentDone("succeeded");

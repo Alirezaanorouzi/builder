@@ -3,6 +3,7 @@ import { processOneProvisioningJob } from "@/services/provisioning.service";
 import { getWorkerConfig, isInlineBuildWorkerEnabled } from "@/lib/worker-config";
 import {
   claimStaleBuildRunForRecovery,
+  claimStaleDeployConfirmationRun,
   reconcileStaleActiveBuildsForSite,
   requeueOrphanedBuildRuns,
 } from "@/lib/build-runs";
@@ -38,7 +39,8 @@ export async function recoverOrphanedBuildRuns(): Promise<boolean> {
   const requeued = await requeueOrphanedBuildRuns();
   if (requeued > 0) console.log(`[worker] re-queued ${requeued} orphaned build run(s)`);
 
-  const stale = await claimStaleBuildRunForRecovery();
+  const deployStale = await claimStaleDeployConfirmationRun();
+  const stale = deployStale ?? (await claimStaleBuildRunForRecovery());
   if (!stale) return false;
   console.log(`[worker] recovering build run ${stale.id} (was ${stale.status})`);
   const { recoverBuildRun } = await import("@/services/build-orchestrator");

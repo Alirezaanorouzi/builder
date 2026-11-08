@@ -24,6 +24,7 @@ export function serializeSiteForClient(site: SiteWithResources) {
     provisioningError: resources?.provisioningError ?? null,
     provisioningAttempts: resources?.provisioningAttempts ?? 0,
     productionUrl: clientProductionUrl(resources),
+    productionCommitSha: resources?.productionCommitSha ?? null,
     previewAvailable: isPreviewUnlocked(resources),
     githubRepoFullName: resources?.githubRepoFullName ?? null,
   };

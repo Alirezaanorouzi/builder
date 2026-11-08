@@ -106,16 +106,35 @@ export async function confirmDeploymentForRun(options: {
     message: "Publishing your website…",
   });
 
-  const deploy = await waitForDeployment({
+  const deployPoll = {
     projectId: tenant.vercelProjectId,
     teamId: tenant.vercelTeamId,
     commitSha: headAfter,
-    // The commit SHA identifies the deployment; do not filter by creation time
-    // (a previous run's push may still be the one being built).
     sinceMs: 0,
     ...vercelDeployPollOptions(),
     onPoll: () => touchBuildRun(buildRunId),
-  });
+  } as const;
+
+  const CONFIRM_ROUNDS = 3;
+  let deploy: DeploymentResult = {
+    status: "timeout",
+    note: "deploy_poll_not_started",
+    retryable: true,
+  };
+
+  for (let round = 0; round < CONFIRM_ROUNDS; round++) {
+    if (round > 0) {
+      console.info("[build] retrying Vercel deploy confirmation", buildRunId, round);
+      publishBuildStream(buildRunId, "status", {
+        message: "هنوز در حال بررسی انتشار پیش‌نمایش…",
+      });
+      await touchBuildRun(buildRunId);
+      await new Promise((r) => setTimeout(r, 6_000 * round));
+    }
+    deploy = await waitForDeployment(deployPoll);
+    if (deploy.status === "ready") break;
+    if (!isRetryableDeployOutcome(deploy)) break;
+  }
 
   if (deploy.status === "ready") {
     await recordProductionCommit(siteId, deploy.commitSha ?? headAfter);

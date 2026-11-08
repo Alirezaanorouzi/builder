@@ -84,9 +84,10 @@ export async function streamCloudAgentRun(
     const reader = upstream.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let stopReading = false;
 
     try {
-      while (true) {
+      while (!stopReading) {
         const { done, value } = await reader.read();
         if (done) break;
 
@@ -154,11 +155,20 @@ export async function streamCloudAgentRun(
                 finishedAt: new Date().toISOString(),
               });
             }
+            if (runFinished) {
+              stopReading = true;
+              void reader.cancel().catch(() => {});
+              break;
+            }
           }
         }
       }
     } finally {
-      reader.releaseLock();
+      try {
+        reader.releaseLock();
+      } catch {
+        /* cancelled */
+      }
     }
 
     if (runFinished) return true;
