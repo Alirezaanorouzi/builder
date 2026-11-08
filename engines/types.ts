@@ -67,6 +67,7 @@ export type ActivityEventMeta = {
   tool?: string;
   path?: string;
   status?: string;
+  callId?: string;
 };
 
 export type EngineStreamEvent =

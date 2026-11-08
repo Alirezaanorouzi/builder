@@ -83,6 +83,12 @@ export async function handleChatSend(
       promptImages,
     });
 
+    if (promptImages.length > 0) {
+      console.info(
+        `[chat-send] queued build ${buildRun.id} with ${promptImages.length} prompt image(s) for site ${siteId}`
+      );
+    }
+
     kickInlineWorkerTick();
 
     return Response.json({

@@ -14,6 +14,7 @@
 
 .rootSetup {
   background: #000;
+  justify-content: flex-end;
 }
 
 .rootPreview {
@@ -35,16 +36,21 @@
 /* Zoom + brighten toward vanishing-point / light (build & preview wait). */
 .backdropImagePreview {
   object-fit: cover;
-  object-position: center 42%;
-  transform-origin: 50% 42%;
+  object-position: center 55%;
+  transform-origin: 50% 55%;
   will-change: transform, filter;
   animation: rushToLight 3.2s ease-in-out infinite;
+}
+
+.backdropImageSetup {
+  object-fit: cover;
+  object-position: center 38%;
 }
 
 .lightBloom {
   position: absolute;
   left: 50%;
-  top: 42%;
+  top: 55%;
   width: min(42vw, 220px);
   height: min(42vw, 220px);
   transform: translate(-50%, -50%);
@@ -80,6 +86,15 @@
   );
 }
 
+.backdropScrimSetup {
+  background: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0.08) 0%,
+    rgba(0, 0, 0, 0.22) 50%,
+    rgba(0, 0, 0, 0.62) 100%
+  );
+}
+
 .copy {
   position: relative;
   z-index: 2;
@@ -90,6 +105,9 @@
 
 .copySetup {
   margin: 0;
+  margin-top: auto;
+  margin-bottom: 3.5rem;
+  padding-bottom: 8px;
 }
 
 .copyPreview {
@@ -143,6 +161,29 @@
     opacity: 0.95;
     transform: translate(-50%, -50%) scale(1.08);
   }
+}
+
+.progressTrack {
+  position: absolute;
+  z-index: 3;
+  left: max(20px, env(safe-area-inset-left, 0px));
+  right: max(20px, env(safe-area-inset-right, 0px));
+  bottom: max(18px, env(safe-area-inset-bottom, 0px));
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    rgba(180, 210, 255, 0.75) 0%,
+    rgba(255, 255, 255, 0.92) 100%
+  );
+  transition: width 0.65s ease-out;
 }
 
 @media (prefers-reduced-motion: reduce) {

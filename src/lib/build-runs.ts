@@ -13,6 +13,13 @@ export const ACTIVE_BUILD_STATUSES: BuildRunStatus[] = [
   "deploying",
 ];
 
+/** Blocks queuing another user message while the agent is still working. */
+export const AGENT_EXCLUSIVE_BUILD_STATUSES: BuildRunStatus[] = [
+  "queued",
+  "preparing_workspace",
+  "running",
+];
+
 export const TERMINAL_BUILD_STATUSES: BuildRunStatus[] = [
   "succeeded",
   "failed",
@@ -161,6 +168,13 @@ export async function findActiveBuildForSite(siteId: string) {
   });
 }
 
+export async function findAgentExclusiveBuildForSite(siteId: string) {
+  return prisma.buildRun.findFirst({
+    where: { siteId, status: { in: AGENT_EXCLUSIVE_BUILD_STATUSES } },
+    orderBy: { createdAt: "desc" },
+  });
+}
+
 export async function createQueuedBuildRun(options: {
   siteId: string;
   chatSessionId: string;
@@ -170,10 +184,10 @@ export async function createQueuedBuildRun(options: {
 }) {
   await reconcileStaleActiveBuildsForSite(options.siteId);
 
-  const active = await findActiveBuildForSite(options.siteId);
+  const active = await findAgentExclusiveBuildForSite(options.siteId);
   if (active) {
     throw new HttpError(
-      "A build is already in progress for this site. Wait for it to finish.",
+      "The agent is still working on the previous request. Wait a moment or try again.",
       409
     );
   }
@@ -205,6 +219,7 @@ export function publishEngineStreamEvent(buildRunId: string, event: EngineStream
         message: event.message,
         tool: event.meta?.tool,
         path: event.meta?.path,
+        callId: event.meta?.callId,
         agentStatus: event.meta?.status,
       });
       break;

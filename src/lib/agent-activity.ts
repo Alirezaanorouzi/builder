@@ -1,11 +1,14 @@
 /** Client-side agent activity timeline (BuildRun SSE → Cursor-like UX). */
 
+import { categoryForTool, type ToolActivityCategory } from "@/lib/cursor-tool-labels";
+
 export type AgentRunPhase = "working" | "completed" | "failed" | "cancelled";
 
 export type ActivityEventMeta = {
   tool?: string;
   path?: string;
   status?: string;
+  callId?: string;
 };
 
 export type RawActivityInput = {
@@ -16,22 +19,19 @@ export type RawActivityInput = {
   atMs?: number;
 };
 
+export type ActivityCategory =
+  | ToolActivityCategory
+  | "deploy"
+  | "error"
+  | "system";
+
 export type ActivityTimelineEntry = {
   eventId: string;
   atMs: number;
   label: string;
   category: ActivityCategory;
+  callId?: string;
 };
-
-export type ActivityCategory =
-  | "explore"
-  | "search"
-  | "read"
-  | "edit"
-  | "command"
-  | "deploy"
-  | "system"
-  | "error";
 
 export type AgentActivitySnapshot = {
   phase: AgentRunPhase;
@@ -72,44 +72,21 @@ function classifyStatusMessage(message: string): { category: ActivityCategory; l
   return { category: "system", label: message };
 }
 
-function classifyToolActivity(message: string, meta?: ActivityEventMeta): { category: ActivityCategory; label: string } {
-  const tool = (meta?.tool ?? "").toLowerCase();
-  const path = meta?.path?.trim();
-
-  if (tool.includes("grep") || tool.includes("search") || message.toLowerCase().includes("search")) {
-    return { category: "search", label: "Searched codebase" };
-  }
-  if (tool.includes("list") || tool.includes("glob") || tool.includes("explore")) {
-    return { category: "explore", label: path ? `Explored ${path}` : "Explored files" };
-  }
-  if (tool.includes("read") || message.toLowerCase().includes("read")) {
-    return { category: "read", label: path ? `Read ${path}` : "Read file" };
-  }
-  if (
-    tool.includes("write") ||
-    tool.includes("edit") ||
-    tool.includes("replace") ||
-    message.toLowerCase().includes("updating website")
-  ) {
-    return { category: "edit", label: path ? `Edited ${path}` : "Edited files" };
-  }
-  if (tool.includes("terminal") || tool.includes("run_terminal") || message.toLowerCase().includes("running commands")) {
-    return { category: "command", label: "Running build checks" };
-  }
-  if (tool.includes("browser") || message.toLowerCase().includes("browser")) {
-    return { category: "command", label: "Testing in browser" };
-  }
-  return { category: "system", label: message };
-}
-
 export function rawInputToTimelineEntry(input: RawActivityInput): ActivityTimelineEntry {
   const atMs = input.atMs ?? Date.now();
   if (input.kind === "error") {
     return { eventId: input.eventId, atMs, label: input.message, category: "error" };
   }
   if (input.kind === "activity") {
-    const { category, label } = classifyToolActivity(input.message, input.meta);
-    return { eventId: input.eventId, atMs, label, category };
+    const tool = input.meta?.tool ?? "";
+    const category = tool ? categoryForTool(tool) : "system";
+    return {
+      eventId: input.eventId,
+      atMs,
+      label: input.message,
+      category,
+      callId: input.meta?.callId,
+    };
   }
   const { category, label } = classifyStatusMessage(input.message);
   return { eventId: input.eventId, atMs, label, category };
@@ -134,15 +111,16 @@ export function mergeTimelineForDisplay(entries: ActivityTimelineEntry[]): Activ
     } else {
       const count = batch.length;
       let label = first.label;
-      if (cat === "explore") label = count === 1 ? first.label : `Explored ${count} files`;
-      else if (cat === "search") label = count === 1 ? "Searched codebase" : `Searched ${count} times`;
-      else if (cat === "read") {
-        const paths = batch.map((e) => e.label.replace(/^Read /, "")).filter((p) => p && p !== "Read file");
-        label = paths.length === 1 ? `Read ${paths[0]}` : paths.length > 1 ? `Read ${paths.length} files` : first.label;
+      if (cat === "explore") {
+        label = count === 1 ? first.label : `مرور ${count} فایل`;
+      } else if (cat === "search") {
+        label = count === 1 ? first.label : `جستجو (${count} بار)`;
+      } else if (cat === "read") {
+        label = count === 1 ? first.label : `خواندن ${count} فایل`;
       } else if (cat === "edit") {
-        label = count === 1 ? first.label : `Edited ${count} files`;
+        label = count === 1 ? first.label : `ویرایش ${count} فایل`;
       } else if (cat === "command") {
-        label = count === 1 ? first.label : `Ran ${count} commands`;
+        label = count === 1 ? first.label : `اجرای ${count} دستور`;
       }
       out.push({ ...first, label });
     }
@@ -172,7 +150,29 @@ export function applyRawActivityEvent(
   seenEventIds.add(input.eventId);
 
   const entry = rawInputToTimelineEntry(input);
-  const timeline = [...snapshot.timeline, entry];
+  let timeline = snapshot.timeline;
+
+  const callId = input.meta?.callId?.trim();
+  if (input.kind === "activity" && callId) {
+    const idx = timeline.findIndex((e) => e.callId === callId);
+    if (idx >= 0) {
+      const prev = timeline[idx]!;
+      timeline = [
+        ...timeline.slice(0, idx),
+        {
+          ...entry,
+          eventId: prev.eventId,
+          atMs: prev.atMs,
+          callId,
+        },
+        ...timeline.slice(idx + 1),
+      ];
+    } else {
+      timeline = [...timeline, entry];
+    }
+  } else {
+    timeline = [...timeline, entry];
+  }
 
   if (input.kind === "error") {
     return {

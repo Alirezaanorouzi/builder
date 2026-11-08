@@ -27,6 +27,7 @@ export type BuildStreamEvent = {
   url?: string;
   tool?: string;
   path?: string;
+  callId?: string;
   /** Tool / run status from agent */
   agentStatus?: string;
   /** Terminal BuildRun status on done */
@@ -202,6 +203,7 @@ export function streamEventToSse(
           message: event.message ?? "",
           tool: event.tool,
           path: event.path,
+          callId: event.callId,
           status: event.agentStatus,
         },
       };

@@ -7,8 +7,18 @@ const DEFAULT_MESSAGE =
 
 type Props = {
   message?: string;
+  setupProgress?: number;
 };
 
-export function AccountSetupWaitingView({ message = DEFAULT_MESSAGE }: Props) {
-  return <SpaceWaitingView message={message} variant="setup" />;
+export function AccountSetupWaitingView({
+  message = DEFAULT_MESSAGE,
+  setupProgress = 8,
+}: Props) {
+  return (
+    <SpaceWaitingView
+      message={message}
+      variant="setup"
+      setupProgress={setupProgress}
+    />
+  );
 }

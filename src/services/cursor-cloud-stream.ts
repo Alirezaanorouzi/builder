@@ -1,32 +1,10 @@
 import { cursorAuthHeader, cursorStreamUrl } from "@/services/cursor.service";
 import type { EngineStreamEvent } from "@engines/types";
-
-function toolPathFromPayload(payload: Record<string, unknown>): string | undefined {
-  const args = payload.args;
-  if (args && typeof args === "object") {
-    const a = args as Record<string, unknown>;
-    for (const key of ["path", "file_path", "target_file", "filePath", "relative_workspace_path"]) {
-      if (typeof a[key] === "string" && a[key]) return a[key] as string;
-    }
-  }
-  for (const key of ["path", "file_path", "target_file"]) {
-    if (typeof payload[key] === "string" && payload[key]) return payload[key] as string;
-  }
-  return undefined;
-}
-
-function labelForTool(name: string, path: string | undefined): string {
-  const n = name.toLowerCase();
-  if (n.includes("read") && path) return `Read ${path}`;
-  if ((n.includes("write") || n.includes("edit") || n.includes("replace")) && path) {
-    return `Edited ${path}`;
-  }
-  if (n.includes("grep") || n.includes("search")) return path ? `Searched ${path}` : "Searched codebase";
-  if (n.includes("list") || n.includes("glob")) return path ? `Explored ${path}` : "Explored files";
-  if (n.includes("terminal") || n.includes("run_terminal")) return "Ran terminal command";
-  if (path) return `${name}: ${path}`;
-  return name;
-}
+import {
+  formatToolActivityLabel,
+  isLongRunningTool,
+  pathFromToolPayload,
+} from "@/lib/cursor-tool-labels";
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -36,9 +14,9 @@ const MAX_STREAM_RECONNECTS = 24;
 const MAX_BACKOFF_MS = 8000;
 
 /**
- * Live Cloud Agent SSE (`/v1/agents/.../stream`). Parses events like the Cursor dashboard.
- * Reconnects with `Last-Event-ID` when the connection drops before a terminal `result` event
- * (needed for serverless gateways with `maxDuration`).
+ * Live Cloud Agent SSE (`/v1/agents/.../stream`).
+ * Uses simplified events only (`tool_call`, `assistant`, `result`) — not `interaction_update`.
+ * Reconnects with `Last-Event-ID` when the connection drops before a terminal `result` event.
  */
 export async function streamCloudAgentRun(
   agentId: string,
@@ -58,11 +36,36 @@ export async function streamCloudAgentRun(
     return fetch(cursorStreamUrl(agentId, runId), { headers });
   }
 
+  function emitToolCall(payload: Record<string, unknown>) {
+    const callId = typeof payload.callId === "string" ? payload.callId : "";
+    const name = String(payload.name ?? "");
+    const status = String(payload.status ?? "");
+    if (status !== "running" && status !== "completed") return;
+    if (!name) return;
+
+    const path = pathFromToolPayload(payload.args, payload.result);
+    const message = formatToolActivityLabel(name, path);
+
+    const meta = {
+      tool: name,
+      status,
+      path,
+      ...(callId ? { callId } : {}),
+    };
+
+    if (status === "running") {
+      if (!isLongRunningTool(name)) return;
+      onEvent({ type: "activity", message, meta });
+      return;
+    }
+
+    onEvent({ type: "activity", message, meta: { ...meta, status: "completed" } });
+  }
+
   while (!runFinished && reconnectAttempt <= MAX_STREAM_RECONNECTS) {
     const upstream = await openStream();
 
     if (upstream.status === 410) {
-      // Stream window expired; caller should use `getCursorRun` for the outcome.
       return runFinished;
     }
 
@@ -115,7 +118,9 @@ export async function streamCloudAgentRun(
             continue;
           }
 
-          if (eventType === "thinking") continue;
+          if (eventType === "thinking" || eventType === "heartbeat" || eventType === "interaction_update") {
+            continue;
+          }
 
           if (eventType === "assistant") {
             const text = String(payload.text ?? "");
@@ -124,15 +129,7 @@ export async function streamCloudAgentRun(
           }
 
           if (eventType === "tool_call") {
-            const name = String(payload.name ?? "");
-            const status = String(payload.status ?? "");
-            if (status !== "running") continue;
-            const path = toolPathFromPayload(payload);
-            onEvent({
-              type: "activity",
-              message: labelForTool(name, path),
-              meta: { tool: name, status, path },
-            });
+            emitToolCall(payload);
             continue;
           }
 
@@ -166,7 +163,6 @@ export async function streamCloudAgentRun(
 
     if (runFinished) return true;
 
-    // Connection closed before a terminal event — reconnect if we can resume.
     reconnectAttempt += 1;
     if (reconnectAttempt > MAX_STREAM_RECONNECTS) break;
     await sleep(Math.min(800 * reconnectAttempt, MAX_BACKOFF_MS));

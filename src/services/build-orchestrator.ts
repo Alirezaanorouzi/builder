@@ -269,6 +269,10 @@ export async function executeBuildRun(buildRunId: string): Promise<void> {
       return failRun(buildRunId, result.errorMessage ?? "Agent run did not complete successfully");
     }
 
+    publishBuildStream(buildRunId, "status", {
+      message: "کد آماده شد؛ در حال انتشار در پیش‌نمایش…",
+    });
+
     return confirmDeploymentForRun({ buildRunId, siteId: run.site.id, tenant });
   });
 }

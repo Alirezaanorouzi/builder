@@ -23,6 +23,7 @@ import {
   type RawActivityInput,
 } from "@/lib/agent-activity";
 import { DEFERRED_DEPLOY_CONFIRMATION } from "@/lib/build-user-messages";
+import { provisioningProgressPercent } from "@/lib/provisioning-progress";
 import { signOutBuilderAccount } from "@/lib/sign-out";
 import {
   BUILDER_BUILD_RUN_KEY,
@@ -53,6 +54,7 @@ const PREVIEW_WAIT_PUBLISHING = "در حال منتشر کردن برنامه…
 type SiteSummary = {
   id: string;
   status: string;
+  provisioningStep?: string | null;
   provisioningError?: string | null;
   productionUrl?: string | null;
 };
@@ -64,6 +66,7 @@ type SsePayload = {
   url?: string;
   tool?: string;
   path?: string;
+  callId?: string;
   status?: string;
   errorMessage?: string;
   startedAt?: string;
@@ -85,6 +88,37 @@ function newId() {
   return crypto.randomUUID();
 }
 
+const AGENT_PHASE_STATUSES = new Set(["queued", "preparing_workspace", "running"]);
+const DEPLOY_PHASE_STATUSES = new Set(["pushing", "deploying"]);
+
+type HistoryTurn = {
+  buildRunId: string;
+  userMessage: string;
+  assistantText: string;
+  status: string;
+};
+
+function chatItemsFromHistoryTurns(turns: HistoryTurn[]): ChatItem[] {
+  const out: ChatItem[] = [];
+  for (const turn of turns) {
+    out.push({
+      id: `${turn.buildRunId}-user`,
+      kind: "user",
+      text: turn.userMessage,
+    });
+    const assistant = turn.assistantText.trim();
+    if (assistant) {
+      out.push({
+        id: `${turn.buildRunId}-assistant`,
+        kind: "assistant",
+        text: assistant,
+        buildRunId: turn.buildRunId,
+      });
+    }
+  }
+  return out;
+}
+
 function initialActivitySnapshot(startedAtMs?: number): AgentActivitySnapshot {
   return {
     phase: "working",
@@ -101,6 +135,7 @@ export function Chat() {
   const [siteStatus, setSiteStatus] = useState<string | null>(null);
   const [meReady, setMeReady] = useState(false);
   const [provisioningError, setProvisioningError] = useState<string | null>(null);
+  const [provisioningStep, setProvisioningStep] = useState<string | null>(null);
   const [chatSessionId, setChatSessionId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [items, setItems] = useState<ChatItem[]>([]);
@@ -111,6 +146,7 @@ export function Chat() {
   const [previewMode, setPreviewMode] = useState<"desktop" | "mobile">("mobile");
   const [activeTab, setActiveTab] = useState<"build" | "preview">("build");
   const [accountOpen, setAccountOpen] = useState(false);
+  const [creatingNewSite, setCreatingNewSite] = useState(false);
   const [buildWaitStartedAt, setBuildWaitStartedAt] = useState<number>(() => Date.now());
   const [previewRefreshKey, setPreviewRefreshKey] = useState(0);
   const [previewPublishing, setPreviewPublishing] = useState(false);
@@ -122,6 +158,7 @@ export function Chat() {
   const activeBuildRunRef = useRef<string | null>(null);
   /** Build run whose agent finished successfully (a later deploy failure must still be shown). */
   const agentSucceededRunRef = useRef<string | null>(null);
+  const historyLoadedForSiteRef = useRef<string | null>(null);
 
   const getSeenSet = useCallback((buildRunId: string) => {
     let set = seenEventIdsRef.current.get(buildRunId);
@@ -255,6 +292,7 @@ export function Chat() {
       if (active) {
         setSiteId(active.id);
         setSiteStatus(active.status);
+        setProvisioningStep(active.provisioningStep ?? null);
         setProvisioningError(active.provisioningError ?? null);
         localStorage.setItem(SITE_ID_KEY, active.id);
         if (active.status === "active" && active.productionUrl) {
@@ -286,10 +324,7 @@ export function Chat() {
     setPreviewRefreshKey((k) => k + 1);
   }, []);
 
-  /**
-   * The agent finished. On success the server may still be publishing the site, so keep the
-   * run "busy" until `done`; on failure release the composer immediately.
-   */
+  /** Agent finished; composer unlocks while deploy/preview may still run in the background. */
   const applyAgentDone = useCallback(
     (buildRunId: string, data: SsePayload) => {
       finishBuildRun(buildRunId, data);
@@ -301,6 +336,7 @@ export function Chat() {
         setBusy(false);
       } else {
         agentSucceededRunRef.current = buildRunId;
+        setBusy(false);
       }
     },
     [finishBuildRun]
@@ -402,6 +438,7 @@ export function Chat() {
           meta: {
             tool: data.tool,
             path: data.path,
+            callId: data.callId,
             status: data.status,
           },
         });
@@ -480,14 +517,54 @@ export function Chat() {
 
   useEffect(() => {
     void loadMe();
-    const storedChat = localStorage.getItem(CHAT_SESSION_KEY);
-    if (storedChat) setChatSessionId(storedChat);
-    const storedBuild = localStorage.getItem(BUILD_RUN_KEY);
-    if (storedBuild) {
-      setBusy(true);
-      startStream(storedBuild);
-    }
-  }, [loadMe, startStream]);
+  }, [loadMe]);
+
+  useEffect(() => {
+    if (!meReady || !siteId) return;
+    if (historyLoadedForSiteRef.current === siteId) return;
+    historyLoadedForSiteRef.current = siteId;
+
+    let cancelled = false;
+    void (async () => {
+      const params = new URLSearchParams({ siteId });
+      const storedChat = localStorage.getItem(CHAT_SESSION_KEY);
+      if (storedChat) params.set("chatSessionId", storedChat);
+      try {
+        const res = await fetch(`/api/chat/history?${params}`);
+        if (cancelled || !res.ok) return;
+        const data = (await res.json()) as {
+          chatSessionId: string | null;
+          turns: HistoryTurn[];
+          activeBuildRunId: string | null;
+        };
+        if (data.chatSessionId) {
+          setChatSessionId(data.chatSessionId);
+          localStorage.setItem(CHAT_SESSION_KEY, data.chatSessionId);
+        }
+        setItems(chatItemsFromHistoryTurns(data.turns ?? []));
+        const storedBuild = localStorage.getItem(BUILD_RUN_KEY);
+        const resumeId =
+          data.activeBuildRunId ??
+          (storedBuild && data.turns?.some((t) => t.buildRunId === storedBuild) ? storedBuild : null);
+        if (!resumeId) return;
+        const activeTurn = data.turns?.find((t) => t.buildRunId === resumeId);
+        if (activeTurn) {
+          if (DEPLOY_PHASE_STATUSES.has(activeTurn.status)) {
+            setPublishWaitStartedAt(Date.now());
+            setPreviewPublishing(true);
+          } else if (AGENT_PHASE_STATUSES.has(activeTurn.status)) {
+            setBusy(true);
+          }
+        }
+        startStream(resumeId);
+      } catch {
+        /* history optional on first visit */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [meReady, siteId, startStream]);
 
   useEffect(() => {
     if (siteStatus !== "provisioning" && siteStatus !== "failed") return;
@@ -541,6 +618,50 @@ export function Chat() {
       setProvisioningError(e instanceof Error ? e.message : "تلاش مجدد ناموفق بود");
     } finally {
       setRetryingProvision(false);
+    }
+  };
+
+  const handleNewWebsite = async () => {
+    if (busy || creatingNewSite) return;
+    const ok = window.confirm(
+      "سایت جدید یک مخزن و پیش‌نمایش جدا می‌سازد. سایت فعلی در حساب شما می‌ماند. ادامه می‌دهید؟"
+    );
+    if (!ok) return;
+    setAccountOpen(false);
+    setCreatingNewSite(true);
+    closeStream();
+    setBusy(false);
+    setPreviewPublishing(false);
+    try {
+      const res = await fetch("/api/sites", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ displayName: "سایت جدید" }),
+      });
+      const data = (await res.json()) as { error?: string; site?: SiteSummary };
+      if (!res.ok || !data.site) {
+        appendError(data.error ?? "ایجاد سایت جدید ناموفق بود");
+        return;
+      }
+      const site = data.site;
+      historyLoadedForSiteRef.current = null;
+      localStorage.removeItem(BUILD_RUN_KEY);
+      localStorage.removeItem(CHAT_SESSION_KEY);
+      setItems([]);
+      setPreviewUrl(null);
+      setChatSessionId(null);
+      setSiteId(site.id);
+      setSiteStatus(site.status);
+      setProvisioningStep(site.provisioningStep ?? null);
+      setProvisioningError(site.provisioningError ?? null);
+      localStorage.setItem(SITE_ID_KEY, site.id);
+      if (site.status === "active" && site.productionUrl) {
+        setPreviewUrl(site.productionUrl);
+      }
+    } catch (e) {
+      appendError(e instanceof Error ? e.message : "خطای شبکه");
+    } finally {
+      setCreatingNewSite(false);
     }
   };
 
@@ -682,6 +803,15 @@ export function Chat() {
                   <button
                     type="button"
                     role="menuitem"
+                    style={styles.accountMenuItem}
+                    disabled={creatingNewSite}
+                    onClick={() => void handleNewWebsite()}
+                  >
+                    {creatingNewSite ? "در حال ساخت سایت…" : "سایت جدید"}
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
                     style={styles.accountMenuSignOut}
                     disabled={busy || signingOut}
                     onClick={() => {
@@ -734,7 +864,9 @@ export function Chat() {
       </header>
 
       {showAccountSetup ? (
-        <AccountSetupWaitingView />
+        <AccountSetupWaitingView
+          setupProgress={provisioningProgressPercent(provisioningStep, siteStatus)}
+        />
       ) : (
         <>
       {siteStatus === "failed" && (
@@ -827,7 +959,7 @@ export function Chat() {
         </div>
       ) : (
         <div className="app-preview" style={styles.previewColumn}>
-          {busy || previewPublishing ? (
+          {previewPublishing || busy ? (
             <PreviewWaitingView
               startedAtMs={previewPublishing ? publishWaitStartedAt : buildWaitStartedAt}
               statusText={previewPublishing ? PREVIEW_WAIT_PUBLISHING : PREVIEW_WAIT_BUILDING}
@@ -1118,6 +1250,17 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 13,
     color: "var(--muted)",
     wordBreak: "break-all",
+  },
+  accountMenuItem: {
+    width: "100%",
+    padding: "8px 10px",
+    borderRadius: 8,
+    border: "1px solid var(--border)",
+    background: "transparent",
+    color: "var(--text)",
+    fontSize: 13,
+    cursor: "pointer",
+    marginBottom: 6,
   },
   accountMenuSignOut: {
     width: "100%",
