@@ -31,7 +31,7 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ## Agent gateway (region-blocked hosts)
 
-If the server egress is blocked by Cursor (“not available in your region”), deploy [`gateway/`](gateway/) to **Vercel** in an allowed region (see `gateway/vercel.json`). The gateway holds `CURSOR_API_KEY`; the builder uses **`CURSOR_TRANSPORT=gateway`**, **`ENGINE_GATEWAY_URL`** (project origin, no path), and **`ENGINE_GATEWAY_TOKEN`** (same value as on Vercel). Then **remove `CURSOR_API_KEY` from Liara** so the key never transits the blocked region.
+If the server egress is blocked by Cursor (“not available in your region”), deploy the gateway to **Vercel** from **[`builder-cursor-gateway`](https://github.com/Alirezaanorouzi/builder-cursor-gateway)** (sync from [`gateway/`](gateway/) with `npm run sync:gateway-github:push`; that folder is excluded from Liara via `.liaraignore`). The gateway holds `CURSOR_API_KEY`; the builder uses **`CURSOR_TRANSPORT=gateway`**, **`ENGINE_GATEWAY_URL`** (project origin, no path), and **`ENGINE_GATEWAY_TOKEN`** (same value as on Vercel). Then **remove `CURSOR_API_KEY` from Liara** so the key never transits the blocked region.
 
 Test connectivity: `npx tsx scripts/probe-gateway.ts`
 

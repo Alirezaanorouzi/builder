@@ -2,9 +2,15 @@
 
 Small **Next.js 15 App Router** proxy: your builder (e.g. on Liara) calls this with shared secrets; the gateway forwards **only** allow-listed paths upstream.
 
+**Source of truth for Vercel:** [`builder-cursor-gateway`](https://github.com/Alirezaanorouzi/builder-cursor-gateway) (not the Liara app — `gateway/` is in [`.liaraignore`](../.liaraignore)). Edit `builder/gateway/` here, then from repo root:
+
+```bash
+npm run sync:gateway-github:push
+```
+
 ## Deploy
 
-1. Create a Vercel project with **root directory** `gateway` (or deploy this folder only).
+1. Vercel project connected to **`Alirezaanorouzi/builder-cursor-gateway`**, branch **`main`** (repo root = app root; no `gateway/` subfolder in that repo).
 2. Set env on the Vercel project:
    - `CURSOR_API_KEY` — Cursor API key (stays on Vercel only)
    - `ENGINE_GATEWAY_TOKEN` — long random secret; copy to the builder as `ENGINE_GATEWAY_TOKEN` (Cursor routes)

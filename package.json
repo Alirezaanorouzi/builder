@@ -16,6 +16,8 @@
     "worker": "tsx scripts/build-worker.ts",
     "backfill:preview-gate": "tsx scripts/backfill-preview-gate.ts",
     "probe:gateway": "tsx scripts/probe-gateway.ts",
+    "sync:gateway-github": "node scripts/sync-gateway-github.mjs",
+    "sync:gateway-github:push": "node scripts/sync-gateway-github.mjs --push",
     "logs:liara": "node scripts/liara-logs-api.mjs",
     "status:liara": "node scripts/liara-app-status.mjs",
     "deploy:liara": "node scripts/liara-deploy.mjs",
