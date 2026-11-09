@@ -1,8 +1,10 @@
 import { cursorAuthHeader, cursorStreamUrl } from "@/services/cursor.service";
 import type { EngineStreamEvent } from "@engines/types";
 import {
+  commandFromToolPayload,
   formatToolActivityLabel,
   isLongRunningTool,
+  isTaskTool,
   pathFromToolPayload,
 } from "@/lib/cursor-tool-labels";
 
@@ -41,10 +43,11 @@ export async function streamCloudAgentRun(
     const name = String(payload.name ?? "");
     const status = String(payload.status ?? "");
     if (status !== "running" && status !== "completed") return;
-    if (!name) return;
+    if (!name || isTaskTool(name)) return;
 
     const path = pathFromToolPayload(payload.args, payload.result);
-    const message = formatToolActivityLabel(name, path);
+    const command = commandFromToolPayload(payload.args);
+    const message = formatToolActivityLabel(name, path, command);
 
     const meta = {
       tool: name,

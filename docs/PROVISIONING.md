@@ -12,8 +12,8 @@ Mitigations today: longer retries in `platform-fetch.ts`. If timeouts persist, r
 
 ## Prerequisites (manual)
 
-1. **GitHub template** — The repo in `TEMPLATE_REPO_URL` (e.g. `builder-clinic-template`) must have **Template repository** enabled in GitHub Settings (`is_template: true`). The Generate from Template API fails otherwise.
-2. **Starter content** — Minimal Next.js skeleton in `template/` (`globals.css`, `AGENTS.md`). Customer sites come from chat, not fixed demo content in the template.
+1. **GitHub template** — The repo in `TEMPLATE_REPO_URL` (`Alirezaanorouzi/tempelate1`, formerly `builder-clinic-template`) must have **Template repository** enabled (`is_template: true`). The Generate from Template API fails otherwise.
+2. **Starter content** — **Foundation v2** in `template/` (Next 16, Tailwind v4, shadcn primitives, `AGENTS.md`, `TEMPLATE_VERSION`). Publish to GitHub with `npm run sync:template-github:push` (repo `builder-clinic-template`). Customer sites come from chat + agent-created `DESIGN.md`, not pre-built marketing sections.
 3. **Tokens**
    - `PLATFORM_GITHUB_TOKEN` (or `GITHUB_TOKEN`) — create repos from template.
    - `VERCEL_TOKEN` + `VERCEL_TEAM_ID` — create projects; Vercel GitHub integration must access new repos on that team.

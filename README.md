@@ -78,7 +78,7 @@ src/services/          — GitHub, Vercel, Cursor, provisioning, build orchestra
 engines/cursor/        — Cursor engine adapters (SDK + REST gateway)
 gateway/               — optional Vercel proxy for Cursor API (region bypass)
 src/components/Chat.tsx
-template/              — GitHub template (AGENTS.md + .cursor/environment.json)
+template/              — Foundation v2 for GitHub template (`npm run sync:template-github:push` → builder-website-template)
 scripts/               — worker, prisma CLI, ops probes
 ```
 

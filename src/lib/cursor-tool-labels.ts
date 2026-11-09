@@ -42,6 +42,30 @@ export function pathFromToolPayload(args: unknown, result?: unknown): string | u
   return undefined;
 }
 
+const COMMAND_KEYS = ["command", "cmd", "script"] as const;
+
+/** Shell command text from a Cursor tool `args` payload. */
+export function commandFromToolPayload(args: unknown): string | undefined {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return undefined;
+  const obj = args as Record<string, unknown>;
+  for (const key of COMMAND_KEYS) {
+    const value = obj[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+export function isShellTool(toolName: string): boolean {
+  const n = toolName.toLowerCase();
+  return n.includes("terminal") || n.includes("shell") || n === "bash" || n === "exec";
+}
+
+/** Cursor Task is a nested subagent. Its own tools are not streamed, so the parent row sits until it exits. */
+export function isTaskTool(toolName: string): boolean {
+  const n = toolName.toLowerCase();
+  return n === "task" || n.endsWith("_task");
+}
+
 function displayPath(path: string): string {
   const normalized = path.replace(/\\/g, "/");
   const parts = normalized.split("/").filter(Boolean);
@@ -55,13 +79,30 @@ export function categoryForTool(toolName: string): ToolActivityCategory {
   if (n.includes("list") || n.includes("glob") || n.includes("explore")) return "explore";
   if (n.includes("read")) return "read";
   if (n.includes("write") || n.includes("edit") || n.includes("replace")) return "edit";
-  if (n.includes("terminal") || n.includes("run_terminal") || n.includes("browser")) return "command";
+  if (isShellTool(toolName) || n.includes("browser")) return "command";
   if (n.includes("deploy") || n.includes("vercel")) return "deploy";
   return "system";
 }
 
+function shellLabel(command: string | undefined): string {
+  const cmd = (command ?? "").toLowerCase();
+  if (cmd.includes("typecheck") || /\btsc\b/.test(cmd)) return "بررسی نوع‌ها";
+  if (
+    cmd.includes("npm run build") ||
+    cmd.includes("next build") ||
+    cmd.includes("npm run check")
+  ) {
+    return "ساخت برای انتشار";
+  }
+  return "اجرای دستور";
+}
+
 /** Short Persian label for a tool step (filenames stay Latin). */
-export function formatToolActivityLabel(toolName: string, path?: string): string {
+export function formatToolActivityLabel(
+  toolName: string,
+  path?: string,
+  command?: string
+): string {
   const n = toolName.toLowerCase();
   const file = path ? displayPath(path) : undefined;
 
@@ -82,14 +123,9 @@ export function formatToolActivityLabel(toolName: string, path?: string): string
   if (n.includes("list") || n.includes("glob") || n.includes("explore")) {
     return file ? `مرور ${file}` : "مرور فایل‌ها";
   }
-  if (n.includes("terminal") || n.includes("run_terminal")) {
-    return "اجرای دستور";
-  }
+  if (isShellTool(toolName)) return shellLabel(command);
   if (n.includes("browser")) {
     return "آزمایش در مرورگر";
-  }
-  if (n === "task" || n.includes("task")) {
-    return "انجام کار";
   }
   if (n === "mcp") {
     return "اتصال ابزار";
@@ -98,6 +134,5 @@ export function formatToolActivityLabel(toolName: string, path?: string): string
 }
 
 export function isLongRunningTool(toolName: string): boolean {
-  const n = toolName.toLowerCase();
-  return n === "task" || n.includes("task") || n === "mcp";
+  return isShellTool(toolName);
 }

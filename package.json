@@ -18,6 +18,8 @@
     "probe:gateway": "tsx scripts/probe-gateway.ts",
     "sync:gateway-github": "node scripts/sync-gateway-github.mjs",
     "sync:gateway-github:push": "node scripts/sync-gateway-github.mjs --push",
+    "sync:template-github": "node scripts/sync-template-github.mjs",
+    "sync:template-github:push": "node scripts/sync-template-github.mjs --push",
     "logs:liara": "node scripts/liara-logs-api.mjs",
     "status:liara": "node scripts/liara-app-status.mjs",
     "deploy:liara": "node scripts/liara-deploy.mjs",
@@ -46,9 +48,11 @@
   },
   "devDependencies": {
     "@liara/cli": "^9.4.0",
+    "@radix-ui/react-slot": "^1.2.4",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "class-variance-authority": "^0.7.1",
     "dotenv": "^16.4.7",
     "tsx": "^4.19.2",
     "typescript": "^5.7.0"

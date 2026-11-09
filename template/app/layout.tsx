@@ -1,21 +1,16 @@
-import { Inter } from "next/font/google";
+import type { Metadata } from "next";
 import "./globals.css";
 
-const inter = Inter({
-  subsets: ["latin"],
-  display: "swap",
-  variable: "--font-sans",
-});
-
-export const metadata = {
+export const metadata: Metadata = {
   title: "Website",
-  description: "Customer site built with the website builder",
+  description: "Customer website",
 };
 
+/** Agent: set lang, dir, fonts (prefer next/font/local), and metadata from DESIGN.md. */
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className={inter.variable}>{children}</body>
+    <html lang="en" dir="ltr">
+      <body className="font-sans antialiased">{children}</body>
     </html>
   );
 }

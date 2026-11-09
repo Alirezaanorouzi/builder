@@ -50,6 +50,7 @@ export function AgentActivity({ snapshot, onToggleExpanded }: Props) {
         <button
           type="button"
           className={styles.header}
+          onMouseDown={(e) => e.preventDefault()}
           onClick={onToggleExpanded}
           aria-expanded={snapshot.expanded}
         >

@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -200,7 +201,8 @@ export function Chat() {
   const [awaitingDeployConfirm, setAwaitingDeployConfirm] = useState(false);
   const [publishWaitStartedAt, setPublishWaitStartedAt] = useState<number>(() => Date.now());
   const [usage, setUsage] = useState<UsageView | null>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const messagesScrollRef = useRef<HTMLDivElement>(null);
+  const pendingScrollUserIdRef = useRef<string | null>(null);
   const accountRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
   const seenEventIdsRef = useRef<Map<string, Set<string>>>(new Map());
@@ -329,35 +331,35 @@ export function Chat() {
 
   const loadMe = useCallback(async () => {
     try {
-      const res = await fetch("/api/me");
-      if (!res.ok) return null;
-      const data = (await res.json()) as {
-        user?: { email?: string };
-        sites?: SiteSummary[];
+    const res = await fetch("/api/me");
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      user?: { email?: string };
+      sites?: SiteSummary[];
         usage?: UsageView;
-      };
+    };
       if (data.usage) setUsage(data.usage);
-      if (data.user?.email) setUserEmail(data.user.email);
-      const sites = data.sites ?? [];
-      const stored = localStorage.getItem(SITE_ID_KEY);
-      const active =
-        sites.find((s) => s.id === stored) ?? sites.find((s) => s.status === "active") ?? sites[0];
-      if (active) {
-        setSiteId(active.id);
-        setSiteStatus(active.status);
+    if (data.user?.email) setUserEmail(data.user.email);
+    const sites = data.sites ?? [];
+    const stored = localStorage.getItem(SITE_ID_KEY);
+    const active =
+      sites.find((s) => s.id === stored) ?? sites.find((s) => s.status === "active") ?? sites[0];
+    if (active) {
+      setSiteId(active.id);
+      setSiteStatus(active.status);
         setProvisioningStep(active.provisioningStep ?? null);
-        setProvisioningError(active.provisioningError ?? null);
-        localStorage.setItem(SITE_ID_KEY, active.id);
+      setProvisioningError(active.provisioningError ?? null);
+      localStorage.setItem(SITE_ID_KEY, active.id);
         if (active.status === "active" && active.productionUrl) {
-          setPreviewUrl(active.productionUrl);
+        setPreviewUrl(active.productionUrl);
         } else {
           setPreviewUrl(null);
         }
         if (active.productionCommitSha != null) {
           productionShaBeforeDeployRef.current ??= active.productionCommitSha;
-        }
       }
-      return active;
+    }
+    return active;
     } finally {
       setMeReady(true);
     }
@@ -634,7 +636,7 @@ export function Chat() {
     let cancelled = false;
     void (async () => {
       const params = new URLSearchParams({ siteId });
-      const storedChat = localStorage.getItem(CHAT_SESSION_KEY);
+    const storedChat = localStorage.getItem(CHAT_SESSION_KEY);
       if (storedChat) params.set("chatSessionId", storedChat);
       try {
         const res = await fetch(`/api/chat/history?${params}`);
@@ -654,7 +656,7 @@ export function Chat() {
         } else {
           setItems(chatItemsFromHistoryTurns(data.turns ?? []));
         }
-        const storedBuild = localStorage.getItem(BUILD_RUN_KEY);
+    const storedBuild = localStorage.getItem(BUILD_RUN_KEY);
         const resumeId =
           data.activeBuildRunId ??
           (storedBuild && data.turns?.some((t) => t.buildRunId === storedBuild) ? storedBuild : null);
@@ -665,7 +667,7 @@ export function Chat() {
             setPublishWaitStartedAt(Date.now());
             setPreviewPublishing(true);
           } else if (AGENT_PHASE_STATUSES.has(activeTurn.status)) {
-            setBusy(true);
+      setBusy(true);
           }
         }
         startStream(resumeId);
@@ -704,9 +706,20 @@ export function Chat() {
     return () => window.clearInterval(timer);
   }, [awaitingDeployConfirm, loadMe, refreshPreview, siteId]);
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [items, busy]);
+  useLayoutEffect(() => {
+    const userId = pendingScrollUserIdRef.current;
+    if (!userId) return;
+    const container = messagesScrollRef.current;
+    if (!container) return;
+    const messageEl = container.querySelector<HTMLElement>(`[data-chat-item-id="${userId}"]`);
+    if (!messageEl) return;
+    pendingScrollUserIdRef.current = null;
+    const turn = messageEl.closest<HTMLElement>(".chat-latest-turn");
+    if (turn && turn.getBoundingClientRect().height + 1 < container.clientHeight) {
+      turn.style.minHeight = `${container.clientHeight}px`;
+    }
+    scrollChatItemToTop(container, messageEl);
+  }, [items]);
 
   useEffect(() => () => closeStream(), [closeStream]);
 
@@ -722,7 +735,16 @@ export function Chat() {
   }, [accountOpen]);
 
   const toggleActivityExpanded = (buildRunId: string) => {
+    const container = messagesScrollRef.current;
+    const scrollTop = container?.scrollTop ?? 0;
     updateActivity(buildRunId, (snap) => ({ ...snap, expanded: !snap.expanded }));
+    const restore = () => {
+      if (container) container.scrollTop = scrollTop;
+    };
+    requestAnimationFrame(() => {
+      restore();
+      requestAnimationFrame(restore);
+    });
   };
 
   const retryProvisioning = async () => {
@@ -835,9 +857,9 @@ export function Chat() {
     if (busy) return;
     if (siteStatus && siteStatus !== "active") {
       appendError(
-        siteStatus === "provisioning"
+          siteStatus === "provisioning"
           ? "لطفاً چند لحظه صبر کنید؛ حساب شما در حال آماده‌سازی است."
-          : provisioningError ??
+            : provisioningError ??
               (siteStatus === "failed"
                 ? "راه‌اندازی سایت کامل نشد. از دکمه تلاش مجدد در بالا استفاده کنید یا صفحه را رفرش کنید."
                 : "سایت آماده نیست. راه‌اندازی را تکمیل کنید و دوباره تلاش کنید.")
@@ -849,10 +871,12 @@ export function Chat() {
     const previews = attachments.pending.map((p) => p.previewUrl);
 
     setInput("");
+    const userMessageId = newId();
+    pendingScrollUserIdRef.current = userMessageId;
     setItems((prev) => [
       ...prev,
       {
-        id: newId(),
+        id: userMessageId,
         kind: "user",
         text: text || "پیوست تصویر",
         imagePreviews: previews.length ? previews : undefined,
@@ -886,7 +910,7 @@ export function Chat() {
       if (!res.ok) {
         if (res.status === 429 && data.code === "QUOTA_LOCKED" && data.usage) {
           setUsage(data.usage);
-          setBusy(false);
+        setBusy(false);
           return;
         }
         if (res.status === 409) {
@@ -942,10 +966,10 @@ export function Chat() {
               {accountOpen && (
                 <div style={styles.accountMenu} role="menu">
                   <p style={styles.accountMenuEmail} dir="ltr">
-                    {userEmail}
+                {userEmail}
                   </p>
-                  <button
-                    type="button"
+              <button
+                type="button"
                     role="menuitem"
                     style={styles.accountMenuItem}
                     disabled={creatingNewSite}
@@ -967,17 +991,17 @@ export function Chat() {
                     type="button"
                     role="menuitem"
                     style={styles.accountMenuSignOut}
-                    disabled={busy || signingOut}
+                disabled={busy || signingOut}
                     onClick={() => {
                       setAccountOpen(false);
                       void handleSignOut();
                     }}
-                  >
+              >
                     {signingOut ? "در حال خروج…" : "خروج"}
-                  </button>
-                </div>
-              )}
+              </button>
             </div>
+          )}
+        </div>
           )}
         </div>
 
@@ -1027,24 +1051,25 @@ export function Chat() {
         <>
       {siteStatus === "failed" && (
         <div style={styles.banner}>
-              <p style={styles.provisioningError}>
-                {provisioningError ??
+            <p style={styles.provisioningError}>
+              {provisioningError ??
                   "راه‌اندازی کامل نشد. دوباره تلاش کنید یا اگر گیت‌هاب و ورسل وصل هستند صفحه را رفرش کنید."}
-              </p>
-              <button
-                type="button"
-                style={styles.retryProvisionButton}
-                disabled={retryingProvision}
-                onClick={() => void retryProvisioning()}
-              >
+            </p>
+            <button
+              type="button"
+              style={styles.retryProvisionButton}
+              disabled={retryingProvision}
+              onClick={() => void retryProvisioning()}
+            >
                 {retryingProvision ? "در حال تلاش…" : "تلاش مجدد راه‌اندازی"}
-              </button>
+            </button>
         </div>
       )}
 
       {activeTab === "build" ? (
         <div className="app-main" style={styles.mainColumn}>
           <div
+            ref={messagesScrollRef}
             className="app-messages"
             style={{
               ...styles.messages,
@@ -1055,8 +1080,7 @@ export function Chat() {
               <p style={styles.placeholderHero}>چی تو ذهنته؟</p>
             )}
             {renderChatItems(items, toggleActivityExpanded, setActiveTab, styles)}
-            <div ref={bottomRef} />
-          </div>
+        </div>
 
           <footer className="app-composer" style={styles.footer}>
             {usage ? (
@@ -1083,22 +1107,22 @@ export function Chat() {
                   <ComposerPaperclipIcon />
                 )}
               </button>
-              <textarea
+          <textarea
                 style={styles.inputInner}
                 rows={1}
                 placeholder="تغییرات سایت را بنویسید…"
-                value={input}
+            value={input}
                 disabled={busy || quotaLocked}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    void send();
-                  }
-                }}
-              />
-              <button
-                type="button"
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                void send();
+              }
+            }}
+          />
+          <button
+            type="button"
                 style={{
                   ...styles.sendButton,
                   ...(busy ||
@@ -1115,17 +1139,17 @@ export function Chat() {
                   siteStatus !== "active"
                 }
                 aria-label={busy ? "در حال ساخت" : "ارسال"}
-                onClick={() => void send()}
-              >
+            onClick={() => void send()}
+          >
                 {busy ? (
                   <span style={styles.sendBusy}>…</span>
                 ) : (
                   <ComposerSendIcon />
                 )}
-              </button>
+          </button>
             </div>
-          </footer>
-        </div>
+        </footer>
+      </div>
       ) : (
         <div className="app-preview" style={styles.previewColumn}>
           {previewPublishing || busy ? (
@@ -1136,7 +1160,7 @@ export function Chat() {
           ) : !previewUrl ? (
             <div style={styles.previewEmpty}>
               <p style={styles.placeholder}>هنوز پیش‌نمایشی نیست. از تب «ساخت» سایت را بسازید.</p>
-            </div>
+      </div>
           ) : (
             <>
               <div className="app-preview-toolbar" style={styles.previewToolbar}>
@@ -1149,27 +1173,27 @@ export function Chat() {
                   <PreviewRefreshIcon />
                 </button>
                 <div className="app-preview-modes" style={styles.previewModeToggle}>
-                  <button
-                    type="button"
-                    style={{
-                      ...styles.previewModeButton,
-                      ...(previewMode === "desktop" ? styles.previewModeActive : {}),
-                    }}
-                    onClick={() => setPreviewMode("desktop")}
-                  >
+              <button
+                type="button"
+                style={{
+                  ...styles.previewModeButton,
+                  ...(previewMode === "desktop" ? styles.previewModeActive : {}),
+                }}
+                onClick={() => setPreviewMode("desktop")}
+              >
                     دسکتاپ
-                  </button>
-                  <button
-                    type="button"
-                    style={{
-                      ...styles.previewModeButton,
-                      ...(previewMode === "mobile" ? styles.previewModeActive : {}),
-                    }}
-                    onClick={() => setPreviewMode("mobile")}
-                  >
+              </button>
+              <button
+                type="button"
+                style={{
+                  ...styles.previewModeButton,
+                  ...(previewMode === "mobile" ? styles.previewModeActive : {}),
+                }}
+                onClick={() => setPreviewMode("mobile")}
+              >
                     موبایل
-                  </button>
-                </div>
+              </button>
+            </div>
                 <a
                   href={previewUrl}
                   target="_blank"
@@ -1179,24 +1203,24 @@ export function Chat() {
                   title="باز کردن در تب جدید"
                 >
                   <PreviewExternalLinkIcon />
-                </a>
-              </div>
-              <div
+            </a>
+          </div>
+          <div
                 className="app-preview-frame"
-                style={{
-                  ...styles.previewFrameWrap,
-                  ...(previewMode === "mobile" ? styles.previewFrameMobile : {}),
-                }}
-              >
-                <iframe
+            style={{
+              ...styles.previewFrameWrap,
+              ...(previewMode === "mobile" ? styles.previewFrameMobile : {}),
+            }}
+          >
+            <iframe
                   key={previewRefreshKey}
                   title="پیش‌نمایش سایت"
                   src={buildPreviewIframeSrc(previewUrl, previewRefreshKey)}
                   className="app-preview-iframe"
-                  style={styles.previewIframe}
-                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-                />
-              </div>
+              style={styles.previewIframe}
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            />
+          </div>
             </>
           )}
         </div>
@@ -1213,10 +1237,16 @@ function renderChatItems(
   setActiveTab: (tab: "build" | "preview") => void,
   styles: Record<string, CSSProperties>
 ) {
-  const nodes: ReactNode[] = [];
+  const lastUserIndex = items.reduce(
+    (found, item, index) => (item.kind === "user" ? index : found),
+    -1
+  );
+  const before: ReactNode[] = [];
+  const latest: ReactNode[] = [];
   let i = 0;
 
   while (i < items.length) {
+    const bucket = lastUserIndex >= 0 && i >= lastUserIndex ? latest : before;
     const item = items[i];
 
     if (item.kind === "agentActivity") {
@@ -1230,7 +1260,7 @@ function renderChatItems(
         i += 1;
       }
 
-      nodes.push(
+      bucket.push(
         <div key={item.id} className="chat-assistant-turn">
           <AgentActivity
             snapshot={item.snapshot}
@@ -1245,7 +1275,7 @@ function renderChatItems(
     }
 
     if (item.kind === "assistant") {
-      nodes.push(
+      bucket.push(
         <div key={item.id} className="chat-assistant-turn">
           <ChatMarkdown content={item.text} className="chat-assistant-markdown" />
         </div>
@@ -1254,8 +1284,8 @@ function renderChatItems(
       continue;
     }
 
-    nodes.push(
-      <div key={item.id} style={itemStyle(item)}>
+    bucket.push(
+      <div key={item.id} data-chat-item-id={item.id} style={itemStyle(item)}>
         {item.kind === "preview" ? (
           <>
             <span style={styles.previewInline}>
@@ -1289,7 +1319,24 @@ function renderChatItems(
     i += 1;
   }
 
-  return nodes;
+  if (latest.length === 0) return before;
+  return [
+    ...before,
+    <div key="chat-latest-turn" className="chat-latest-turn">
+      {latest}
+    </div>,
+  ];
+}
+
+function scrollChatItemToTop(
+  container: HTMLElement,
+  messageEl: HTMLElement,
+  paddingPx = 12
+) {
+  const containerRect = container.getBoundingClientRect();
+  const messageRect = messageEl.getBoundingClientRect();
+  const nextTop = container.scrollTop + (messageRect.top - containerRect.top) - paddingPx;
+  container.scrollTo({ top: Math.max(0, nextTop), behavior: "smooth" });
 }
 
 function itemStyle(item: ChatItem): CSSProperties {

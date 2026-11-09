@@ -1,11 +1,7 @@
 export default function Home() {
   return (
-    <main className="site-main">
-      <h1>Welcome</h1>
-      <p>
-        This is a minimal starter. Content, layout, and styling are created from the builder
-        chat — not from a fixed industry template.
-      </p>
+    <main className="mx-auto max-w-3xl px-6 py-16">
+      <p className="text-muted-foreground text-sm">Starter shell — pages and design are added by the agent.</p>
     </main>
   );
 }

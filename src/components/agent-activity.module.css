@@ -1,6 +1,7 @@
 .wrap {
   align-self: stretch;
   padding: 0;
+  overflow-anchor: none;
 }
 
 .header {

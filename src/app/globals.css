@@ -125,7 +125,18 @@ button:disabled {
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
+  overflow-anchor: none;
   background: var(--bg);
+}
+
+.chat-latest-turn {
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  flex-shrink: 0;
+  gap: 14px;
+  width: 100%;
+  min-height: 100%;
 }
 
 .chat-assistant-turn {
