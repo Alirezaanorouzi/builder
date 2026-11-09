@@ -47,17 +47,36 @@ async function readFileAsDataUrl(file: File): Promise<string> {
 function ComposerPaperclipIcon() {
   return (
     <svg
-      width="20"
-      height="20"
+      width="24"
+      height="24"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.75"
+      strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden
     >
       <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+    </svg>
+  );
+}
+
+function ComposerSendIcon() {
+  return (
+    <svg
+      width="22"
+      height="22"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12 5v14" />
+      <path d="m7 10 5-5 5 5" />
     </svg>
   );
 }
@@ -255,4 +274,4 @@ export function useChatAttachments(onError: (message: string) => void, disabled?
 
 export type ChatAttachments = ReturnType<typeof useChatAttachments>;
 
-export { ComposerPaperclipIcon };
+export { ComposerPaperclipIcon, ComposerSendIcon };

@@ -16,7 +16,7 @@ export async function GET(req: Request) {
     const chatSessionId = url.searchParams.get("chatSessionId");
     const history = await buildChatHistory(siteId, chatSessionId);
     if (!history) {
-      return Response.json({ chatSessionId: null, turns: [], activeBuildRunId: null });
+      return Response.json({ chatSessionId: null, turns: [], items: [], activeBuildRunId: null });
     }
     return Response.json(history);
   } catch (e) {

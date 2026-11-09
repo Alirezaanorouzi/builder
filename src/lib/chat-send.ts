@@ -23,6 +23,7 @@ import {
   type StoredPromptImage,
 } from "@/lib/prompt-images";
 import { kickInlineWorkerTick } from "@/lib/build-worker";
+import { assertCanRun, QuotaLockedError } from "@/services/quota.service";
 
 export async function handleChatSend(
   req: NextRequest,
@@ -71,6 +72,8 @@ export async function handleChatSend(
     const site = await assertSiteAccess(user.id, siteId);
     assertSiteReadyForBuild(site);
 
+    await assertCanRun(user.id);
+
     const chatSession = await getOrCreateChatSession(siteId, body.chatSessionId);
     await assertChatSessionAccess(user.id, chatSession.id);
 
@@ -98,6 +101,9 @@ export async function handleChatSend(
       status: buildRun.status,
     });
   } catch (e) {
+    if (e instanceof QuotaLockedError) {
+      return Response.json({ code: "QUOTA_LOCKED", usage: e.view }, { status: 429 });
+    }
     if (e instanceof HttpError || e instanceof SiteNotReadyError) {
       return jsonError(e);
     }

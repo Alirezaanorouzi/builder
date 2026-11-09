@@ -19,6 +19,7 @@ import { setSiteCursorAgentId } from "@/lib/sites";
 import { getDefaultBranchHeadSha } from "@/services/github.service";
 import { waitForDeployment } from "@/services/vercel.service";
 import { recordProductionCommit } from "@/services/preview-commit.service";
+import { assertCanRun, enqueueRunUsage } from "@/services/quota.service";
 import { MAX_DEPLOY_CONFIRM_RECOVERIES, vercelDeployPollOptions } from "@/lib/vercel-deploy-poll";
 import {
   DEFERRED_DEPLOY_CONFIRMATION,
@@ -281,49 +282,80 @@ export async function executeBuildRun(buildRunId: string): Promise<void> {
   });
   if (!run) return;
 
+  const userId = run.site.userId;
+
   await withRunLifecycle(buildRunId, async () => {
-    const tenant = resolveTenantContext(run.site);
-    const engine = getCodingEngine();
-    const promptImages = storedImagesToSdk(parseStoredPromptImages(run.promptImages));
-    const promptText = buildAgentUserPrompt(run.userMessage);
+    let quotaAgentId: string | null = null;
+    let quotaRunId: string | null = null;
+    try {
+      await assertCanRun(userId);
 
-    await updateBuildRunStatus(buildRunId, "running", {
-      startedAt: run.startedAt ?? new Date(),
-    });
+      const tenant = resolveTenantContext(run.site);
+      const engine = getCodingEngine();
+      const promptImages = storedImagesToSdk(parseStoredPromptImages(run.promptImages));
+      const promptText = buildAgentUserPrompt(run.userMessage);
 
-    // `SiteResources.cursorAgentId` is the source of truth; ChatSession.engineAgentId is only
-    // read as a fallback for sessions created before the id moved.
-    const existingAgentId =
-      run.site.resources?.cursorAgentId ?? run.chatSession.engineAgentId;
+      await updateBuildRunStatus(buildRunId, "running", {
+        startedAt: run.startedAt ?? new Date(),
+      });
 
-    const result = await engine.executeRun(
-      {
-        promptText,
-        promptImages: promptImages.length ? promptImages : undefined,
-        agentId: existingAgentId,
-        tenant,
-        // Persist ids the moment the run exists remotely, so a restart can re-attach.
-        onRunStarted: async ({ agentId, runId }) => {
-          await updateBuildRunStatus(buildRunId, "running", { engineRunId: runId });
-          if (run.site.resources?.cursorAgentId !== agentId) {
-            await setSiteCursorAgentId(run.site.id, agentId);
-          }
+      // `SiteResources.cursorAgentId` is the source of truth; ChatSession.engineAgentId is only
+      // read as a fallback for sessions created before the id moved.
+      const existingAgentId =
+        run.site.resources?.cursorAgentId ?? run.chatSession.engineAgentId;
+
+      const result = await engine.executeRun(
+        {
+          promptText,
+          promptImages: promptImages.length ? promptImages : undefined,
+          agentId: existingAgentId,
+          tenant,
+          // Persist ids the moment the run exists remotely, so a restart can re-attach.
+          onRunStarted: async ({ agentId, runId }) => {
+            quotaAgentId = agentId;
+            quotaRunId = runId;
+            await updateBuildRunStatus(buildRunId, "running", { engineRunId: runId });
+            if (run.site.resources?.cursorAgentId !== agentId) {
+              await setSiteCursorAgentId(run.site.id, agentId);
+            }
+          },
         },
-      },
-      (ev) => {
-        publishEngineStreamEvent(buildRunId, ev);
+        (ev) => {
+          publishEngineStreamEvent(buildRunId, ev);
+        }
+      );
+
+      if (result.agentId) quotaAgentId = result.agentId;
+      if (result.runId) quotaRunId = result.runId;
+
+      if (!result.finished) {
+        return failRun(buildRunId, result.errorMessage ?? "Agent run did not complete successfully");
       }
-    );
 
-    if (!result.finished) {
-      return failRun(buildRunId, result.errorMessage ?? "Agent run did not complete successfully");
+      publishBuildStream(buildRunId, "status", {
+        message: "کد آماده شد؛ در حال انتشار در پیش‌نمایش…",
+      });
+
+      return confirmDeploymentForRun({ buildRunId, siteId: run.site.id, tenant });
+    } finally {
+      try {
+        const agentId =
+          quotaAgentId ?? run.site.resources?.cursorAgentId ?? run.chatSession.engineAgentId;
+        let runId = quotaRunId ?? run.engineRunId;
+        if (!runId) {
+          const fresh = await prisma.buildRun.findUnique({
+            where: { id: buildRunId },
+            select: { engineRunId: true },
+          });
+          runId = fresh?.engineRunId ?? null;
+        }
+        if (agentId && runId) {
+          void enqueueRunUsage({ buildRunId, userId, agentId, runId });
+        }
+      } catch (e) {
+        console.warn("[quota] enqueue failed", buildRunId, e);
+      }
     }
-
-    publishBuildStream(buildRunId, "status", {
-      message: "کد آماده شد؛ در حال انتشار در پیش‌نمایش…",
-    });
-
-    return confirmDeploymentForRun({ buildRunId, siteId: run.site.id, tenant });
   });
 }
 
@@ -339,10 +371,13 @@ export async function recoverBuildRun(buildRunId: string): Promise<void> {
   });
   if (!run) return;
 
+  const userId = run.site.userId;
+
   await withRunLifecycle(buildRunId, async () => {
-    const tenant = resolveTenantContext(run.site);
     const agentId = run.site.resources?.cursorAgentId;
     const runId = run.engineRunId;
+    try {
+      const tenant = resolveTenantContext(run.site);
 
     if (run.status === "pushing" || run.status === "deploying") {
       const defers = await countDeferredDeployConfirmations(buildRunId);
@@ -361,6 +396,8 @@ export async function recoverBuildRun(buildRunId: string): Promise<void> {
       return failRun(buildRunId, "Cannot recover: the agent run id was not saved.");
     }
 
+    await assertCanRun(userId);
+
     const result = await getCodingEngine().resumeRun(
       { agentId, runId, onHeartbeat: () => touchBuildRun(buildRunId) },
       (ev) => {
@@ -372,6 +409,15 @@ export async function recoverBuildRun(buildRunId: string): Promise<void> {
       return failRun(buildRunId, result.errorMessage ?? "Agent run did not complete successfully");
     }
 
-    return confirmDeploymentForRun({ buildRunId, siteId: run.site.id, tenant });
+      return confirmDeploymentForRun({ buildRunId, siteId: run.site.id, tenant });
+    } finally {
+      try {
+        if (agentId && runId) {
+          void enqueueRunUsage({ buildRunId, userId, agentId, runId });
+        }
+      } catch (e) {
+        console.warn("[quota] enqueue failed", buildRunId, e);
+      }
+    }
   });
 }

@@ -64,6 +64,8 @@ model User {
   sessions         Session[]
   accounts         Account[]
   sites            Site[]
+  usage            UserUsage?
+  runUsages        RunUsage[]
 
   @@index([accountStatus])
   @@index([role])
@@ -210,6 +212,7 @@ model BuildRun {
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   events        BuildEvent[]
+  runUsage      RunUsage?
 
   @@index([siteId, status])
   @@index([chatSessionId])
@@ -230,4 +233,33 @@ model BuildEvent {
   @@index([buildRunId, createdAt])
   @@index([buildRunId, seq])
   @@index([createdAt])
+}
+
+model UserUsage {
+  userId       String    @id
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planId       String    @default("free")
+  phase        Int       @default(0)
+  windowUnits  BigInt    @default(0)
+  lockedUntil  DateTime?
+  lastUsageAt  DateTime?
+  updatedAt    DateTime  @updatedAt
+}
+
+model RunUsage {
+  buildRunId   String    @id
+  buildRun     BuildRun  @relation(fields: [buildRunId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agentId      String
+  runId        String
+  units        BigInt    @default(0)
+  appliedUnits BigInt    @default(0)
+  tokens       Json?
+  syncCount    Int       @default(0)
+  nextSyncAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([nextSyncAt])
+  @@index([userId, createdAt])
 }

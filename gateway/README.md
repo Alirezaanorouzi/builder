@@ -18,7 +18,7 @@ Small **Next.js 15 App Router** proxy: your builder (e.g. on Liara) calls this w
 
 ### Cursor (`/api/cursor/...`)
 
-Same as before: create agent, follow-up run, get run, run stream, cancel. Auth: `Bearer ENGINE_GATEWAY_TOKEN`.
+Create agent, follow-up run, get run, run stream, cancel, and **GET usage** (`v1/agents/{bc-…}/usage?runId=run-…` only — no extra query params). Auth: `Bearer ENGINE_GATEWAY_TOKEN`.
 
 ### Vercel deployments (`GET /api/vercel/v6/deployments`)
 

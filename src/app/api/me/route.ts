@@ -2,6 +2,7 @@ import { requireSessionUser, jsonError } from "@/lib/access";
 import { ensureInlineWorkerLoop, kickInlineWorkerTick } from "@/lib/build-worker";
 import { ensureDefaultSite, listSitesForUser, serializeSiteForClient } from "@/lib/sites";
 import { getPlatformUser } from "@/services/user.service";
+import { getUsageView } from "@/services/quota.service";
 
 export const runtime = "nodejs";
 
@@ -18,6 +19,7 @@ export async function GET() {
     ensureInlineWorkerLoop();
     kickInlineWorkerTick();
     const sites = await listSitesForUser(session.id);
+    const usage = await getUsageView(session.id);
     return Response.json({
       user: {
         id: session.id,
@@ -27,6 +29,7 @@ export async function GET() {
         accountStatus: profile?.accountStatus ?? "active",
       },
       sites: sites.map(serializeSiteForClient),
+      usage,
     });
   } catch (e) {
     return jsonError(e);

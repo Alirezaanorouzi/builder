@@ -8,6 +8,7 @@ import {
   requeueOrphanedBuildRuns,
 } from "@/lib/build-runs";
 import { maybePruneBuildEvents } from "@/lib/build-stream-bus";
+import { kickUsageSync } from "@/services/quota.service";
 import type { BuildRun } from "@prisma/client";
 
 /** Claim one queued job (Postgres `FOR UPDATE SKIP LOCKED`). */
@@ -90,6 +91,7 @@ export async function processOneWorkerTick(): Promise<boolean> {
   if (mode === "all" || mode === "provisioning") {
     if (await processOneProvisioningJob(workerId, leaseMinutes)) return true;
   }
+  kickUsageSync();
   return false;
 }
 

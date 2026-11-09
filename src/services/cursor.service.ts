@@ -1,4 +1,6 @@
 import { getConfig } from "@/lib/config";
+import type { TokenUsage } from "@/lib/quota/engine";
+import { platformFetch } from "@/lib/platform-fetch";
 
 export type CursorTransport = "direct" | "gateway";
 
@@ -128,6 +130,45 @@ export async function getCursorRun(agentId: string, runId: string): Promise<Curs
     agentId: data.agentId ?? agentId,
     status: String(data.status ?? "").toUpperCase() as CursorRunStatus,
     result: data.result,
+  };
+}
+
+const USAGE_FETCH = { retries: 2, timeoutMs: 8_000 } as const;
+
+function num(v: unknown): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : 0;
+}
+
+/** GET /v1/agents/{id}/usage?runId= — token breakdown for quota weighing. */
+export async function getCursorRunUsage(
+  agentId: string,
+  runId: string
+): Promise<TokenUsage | null> {
+  const q = new URLSearchParams({ runId });
+  const href = cursorApiUrl(`v1/agents/${encodeURIComponent(agentId)}/usage?${q}`);
+  const res = await platformFetch(
+    href,
+    { headers: { Authorization: cursorAuthHeader() } },
+    USAGE_FETCH
+  );
+  if (!res.ok) return null;
+  const data = (await res.json()) as {
+    runs?: Array<{
+      usage?: {
+        inputTokens?: number;
+        outputTokens?: number;
+        cacheWriteTokens?: number;
+        cacheReadTokens?: number;
+      };
+    }>;
+  };
+  const raw = data.runs?.[0]?.usage;
+  if (!raw) return null;
+  return {
+    inputTokens: num(raw.inputTokens),
+    outputTokens: num(raw.outputTokens),
+    cacheWriteTokens: num(raw.cacheWriteTokens),
+    cacheReadTokens: num(raw.cacheReadTokens),
   };
 }
 

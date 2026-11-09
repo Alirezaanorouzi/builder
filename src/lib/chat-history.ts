@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { parseStoredPromptImages } from "@/lib/prompt-images";
 import { ACTIVE_BUILD_STATUSES } from "@/lib/build-runs";
+import { buildChatItemsForRun, type ChatReplayItem } from "@/lib/chat-replay";
 import type { BuildRunStatus } from "@prisma/client";
 
 export type ChatHistoryTurn = {
@@ -32,26 +33,15 @@ export async function resolveChatSessionForHistory(
   });
 }
 
-async function assistantTextForRun(buildRunId: string): Promise<string> {
-  const events = await prisma.buildEvent.findMany({
-    where: { buildRunId, eventType: "assistant" },
-    orderBy: { seq: "asc" },
-    select: { payload: true },
-  });
-  let text = "";
-  for (const ev of events) {
-    const p = ev.payload;
-    if (p && typeof p === "object" && !Array.isArray(p) && typeof (p as { text?: string }).text === "string") {
-      text += (p as { text: string }).text;
-    }
-  }
-  return text.trim();
-}
-
 export async function buildChatHistory(
   siteId: string,
   chatSessionId?: string | null
-): Promise<{ chatSessionId: string; turns: ChatHistoryTurn[]; activeBuildRunId: string | null } | null> {
+): Promise<{
+  chatSessionId: string;
+  turns: ChatHistoryTurn[];
+  items: ChatReplayItem[];
+  activeBuildRunId: string | null;
+} | null> {
   const session = await resolveChatSessionForHistory(siteId, chatSessionId);
   if (!session) return null;
 
@@ -61,9 +51,17 @@ export async function buildChatHistory(
   });
 
   const turns: ChatHistoryTurn[] = [];
+  const items: ChatReplayItem[] = [];
   for (const run of runs) {
     const images = parseStoredPromptImages(run.promptImages);
-    const assistantText = await assistantTextForRun(run.id);
+    const runItems = await buildChatItemsForRun(run);
+    items.push(...runItems);
+    const assistantText =
+      runItems
+        .filter((i): i is Extract<ChatReplayItem, { kind: "assistant" }> => i.kind === "assistant")
+        .map((i) => i.text)
+        .join("\n")
+        .trim() || "";
     turns.push({
       buildRunId: run.id,
       userMessage: run.userMessage,
@@ -80,6 +78,7 @@ export async function buildChatHistory(
   return {
     chatSessionId: session.id,
     turns,
+    items,
     activeBuildRunId: active?.id ?? null,
   };
 }

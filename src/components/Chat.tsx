@@ -11,7 +11,11 @@ import {
 import { useRouter } from "next/navigation";
 import { AgentActivity } from "@/components/AgentActivity";
 import { ChatMarkdown } from "@/components/chat/ChatMarkdown";
-import { useChatAttachments, ComposerPaperclipIcon } from "@/components/chat/ChatComposerAttachments";
+import {
+  useChatAttachments,
+  ComposerPaperclipIcon,
+  ComposerSendIcon,
+} from "@/components/chat/ChatComposerAttachments";
 import { PreviewWaitingView } from "@/components/preview-waiting";
 import { AccountSetupWaitingView } from "@/components/account-setup-waiting";
 import {
@@ -30,6 +34,7 @@ import {
   BUILDER_CHAT_SESSION_KEY,
   BUILDER_SITE_ID_KEY,
 } from "@/lib/builder-client-storage";
+import { UpgradeBar, type UsageView } from "@/components/UpgradeBar";
 
 type ChatItem =
   | {
@@ -129,6 +134,47 @@ function initialActivitySnapshot(startedAtMs?: number): AgentActivitySnapshot {
   };
 }
 
+const PREVIEW_TOOLBAR_ICON = 24;
+
+function PreviewRefreshIcon() {
+  return (
+    <svg
+      width={PREVIEW_TOOLBAR_ICON}
+      height={PREVIEW_TOOLBAR_ICON}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.25"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M21 12a9 9 0 1 1-2.15-5.88" />
+      <path d="M21 3v6h-6" />
+    </svg>
+  );
+}
+
+function PreviewExternalLinkIcon() {
+  return (
+    <svg
+      width={PREVIEW_TOOLBAR_ICON}
+      height={PREVIEW_TOOLBAR_ICON}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.25"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M15 3h6v6" />
+      <path d="M10 14 21 3" />
+      <path d="M18 13v8H4V7h8" />
+    </svg>
+  );
+}
+
 export function Chat() {
   const router = useRouter();
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -153,6 +199,7 @@ export function Chat() {
   const [previewPublishing, setPreviewPublishing] = useState(false);
   const [awaitingDeployConfirm, setAwaitingDeployConfirm] = useState(false);
   const [publishWaitStartedAt, setPublishWaitStartedAt] = useState<number>(() => Date.now());
+  const [usage, setUsage] = useState<UsageView | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const accountRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
@@ -287,7 +334,9 @@ export function Chat() {
       const data = (await res.json()) as {
         user?: { email?: string };
         sites?: SiteSummary[];
+        usage?: UsageView;
       };
+      if (data.usage) setUsage(data.usage);
       if (data.user?.email) setUserEmail(data.user.email);
       const sites = data.sites ?? [];
       const stored = localStorage.getItem(SITE_ID_KEY);
@@ -593,13 +642,18 @@ export function Chat() {
         const data = (await res.json()) as {
           chatSessionId: string | null;
           turns: HistoryTurn[];
+          items?: ChatItem[];
           activeBuildRunId: string | null;
         };
         if (data.chatSessionId) {
           setChatSessionId(data.chatSessionId);
           localStorage.setItem(CHAT_SESSION_KEY, data.chatSessionId);
         }
-        setItems(chatItemsFromHistoryTurns(data.turns ?? []));
+        if (data.items?.length) {
+          setItems(data.items as ChatItem[]);
+        } else {
+          setItems(chatItemsFromHistoryTurns(data.turns ?? []));
+        }
         const storedBuild = localStorage.getItem(BUILD_RUN_KEY);
         const resumeId =
           data.activeBuildRunId ??
@@ -767,8 +821,12 @@ export function Chat() {
     }
   };
 
+  const quotaLocked =
+    usage?.lockedUntil != null && Date.parse(usage.lockedUntil) > Date.now();
+
   const send = async () => {
     const text = input.trim();
+    if (quotaLocked) return;
     if (attachments.isProcessingFiles) {
       appendError("لطفاً چند لحظه صبر کنید تا تصویر آماده شود.");
       return;
@@ -818,12 +876,19 @@ export function Chat() {
       });
       const data = (await res.json()) as {
         error?: string;
+        code?: string;
+        usage?: UsageView;
         siteId?: string;
         chatSessionId?: string;
         buildRunId?: string;
       };
 
       if (!res.ok) {
+        if (res.status === 429 && data.code === "QUOTA_LOCKED" && data.usage) {
+          setUsage(data.usage);
+          setBusy(false);
+          return;
+        }
         if (res.status === 409) {
           localStorage.removeItem(BUILD_RUN_KEY);
           setBusy(false);
@@ -858,7 +923,10 @@ export function Chat() {
 
   return (
     <div className="app-root" style={styles.page}>
-      <header className="app-header-bar" style={styles.header}>
+      <header
+        className={showAccountSetup ? "app-header-bar app-header-over-setup" : "app-header-bar"}
+        style={styles.header}
+      >
         <div style={styles.headerStart}>
           {userEmail && (
             <div ref={accountRef} style={styles.accountWrap}>
@@ -885,6 +953,16 @@ export function Chat() {
                   >
                     {creatingNewSite ? "در حال ساخت سایت…" : "سایت جدید"}
                   </button>
+                  <a
+                    href="https://t.me/+WsUMm76hSOo4MDQ0"
+                    target="_blank"
+                    rel="noreferrer"
+                    role="menuitem"
+                    style={styles.accountMenuLink}
+                    onClick={() => setAccountOpen(false)}
+                  >
+                    گروه تلگرام
+                  </a>
                   <button
                     type="button"
                     role="menuitem"
@@ -940,9 +1018,11 @@ export function Chat() {
       </header>
 
       {showAccountSetup ? (
-        <AccountSetupWaitingView
-          setupProgress={provisioningProgressPercent(provisioningStep, siteStatus)}
-        />
+        <div className="app-setup-overlay">
+          <AccountSetupWaitingView
+            setupProgress={provisioningProgressPercent(provisioningStep, siteStatus)}
+          />
+        </div>
       ) : (
         <>
       {siteStatus === "failed" && (
@@ -964,17 +1044,24 @@ export function Chat() {
 
       {activeTab === "build" ? (
         <div className="app-main" style={styles.mainColumn}>
-          <div className="app-messages" style={styles.messages}>
+          <div
+            className="app-messages"
+            style={{
+              ...styles.messages,
+              ...(items.length === 0 ? styles.messagesEmpty : {}),
+            }}
+          >
             {items.length === 0 && (
-              <p style={styles.placeholder}>
-                مثلاً: «یک سایت ساده برای کلینیک دندانپزشکی با ساعات کاری و تماس بساز.»
-              </p>
+              <p style={styles.placeholderHero}>چی تو ذهنته؟</p>
             )}
             {renderChatItems(items, toggleActivityExpanded, setActiveTab, styles)}
             <div ref={bottomRef} />
           </div>
 
           <footer className="app-composer" style={styles.footer}>
+            {usage ? (
+              <UpgradeBar usage={usage} onExpire={() => void loadMe()} />
+            ) : null}
             {attachments.hiddenFileInput}
             {attachments.attachmentStrip}
             <div style={styles.composerShell}>
@@ -985,7 +1072,7 @@ export function Chat() {
                   opacity: attachments.attachButtonDisabled ? 0.4 : 1,
                   cursor: attachments.attachButtonDisabled ? "not-allowed" : "pointer",
                 }}
-                disabled={attachments.attachButtonDisabled}
+                disabled={attachments.attachButtonDisabled || quotaLocked}
                 aria-label="پیوست تصویر"
                 title="پیوست تصویر (حداکثر ۵)"
                 onClick={attachments.openFilePicker}
@@ -1001,7 +1088,7 @@ export function Chat() {
                 rows={1}
                 placeholder="تغییرات سایت را بنویسید…"
                 value={input}
-                disabled={busy}
+                disabled={busy || quotaLocked}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
@@ -1015,6 +1102,7 @@ export function Chat() {
                 style={{
                   ...styles.sendButton,
                   ...(busy ||
+                  quotaLocked ||
                   !attachments.canSendWithText(input) ||
                   siteStatus !== "active"
                     ? styles.sendButtonDisabled
@@ -1022,13 +1110,18 @@ export function Chat() {
                 }}
                 disabled={
                   busy ||
+                  quotaLocked ||
                   !attachments.canSendWithText(input) ||
                   siteStatus !== "active"
                 }
                 aria-label={busy ? "در حال ساخت" : "ارسال"}
                 onClick={() => void send()}
               >
-                {busy ? "…" : "↑"}
+                {busy ? (
+                  <span style={styles.sendBusy}>…</span>
+                ) : (
+                  <ComposerSendIcon />
+                )}
               </button>
             </div>
           </footer>
@@ -1049,11 +1142,11 @@ export function Chat() {
               <div className="app-preview-toolbar" style={styles.previewToolbar}>
                 <button
                   type="button"
-                  style={styles.previewRefreshButton}
+                  style={styles.previewToolbarIconButton}
                   aria-label="بروزرسانی پیش‌نمایش"
                   onClick={refreshPreview}
                 >
-                  ↻
+                  <PreviewRefreshIcon />
                 </button>
                 <div className="app-preview-modes" style={styles.previewModeToggle}>
                   <button
@@ -1077,8 +1170,15 @@ export function Chat() {
                     موبایل
                   </button>
                 </div>
-                <a href={previewUrl} target="_blank" rel="noreferrer" style={styles.previewOpenTab}>
-                  باز کردن در تب جدید
+                <a
+                  href={previewUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={styles.previewOpenTab}
+                  aria-label="باز کردن در تب جدید"
+                  title="باز کردن در تب جدید"
+                >
+                  <PreviewExternalLinkIcon />
                 </a>
               </div>
               <div
@@ -1285,9 +1385,9 @@ const styles: Record<string, CSSProperties> = {
     transition: "background 0.15s, color 0.15s",
   },
   tabActive: {
-    background: "var(--surface-elevated)",
+    background: "rgba(255, 255, 255, 0.12)",
     color: "var(--text)",
-    boxShadow: "0 1px 2px rgba(0,0,0,0.25)",
+    boxShadow: "none",
   },
   accountWrap: { position: "relative" },
   accountButton: {
@@ -1338,6 +1438,20 @@ const styles: Record<string, CSSProperties> = {
     cursor: "pointer",
     marginBottom: 6,
   },
+  accountMenuLink: {
+    display: "block",
+    width: "100%",
+    padding: "8px 10px",
+    borderRadius: 8,
+    border: "1px solid var(--border)",
+    background: "transparent",
+    color: "var(--text)",
+    fontSize: 13,
+    cursor: "pointer",
+    marginBottom: 6,
+    textAlign: "center",
+    textDecoration: "none",
+  },
   accountMenuSignOut: {
     width: "100%",
     padding: "8px 10px",
@@ -1375,11 +1489,25 @@ const styles: Record<string, CSSProperties> = {
     gap: 14,
     padding: "12px 12px 8px",
   },
+  messagesEmpty: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingBottom: "12vh",
+  },
   previewInline: {
     fontSize: 14,
     lineHeight: 1.55,
   },
   placeholder: { color: "var(--muted)", fontSize: 14, lineHeight: 1.6, margin: 0 },
+  placeholderHero: {
+    margin: 0,
+    textAlign: "center",
+    color: "var(--muted)",
+    fontSize: "clamp(20px, 5.5vw, 24px)",
+    fontWeight: 500,
+    lineHeight: 1.5,
+  },
   footer: {
     display: "flex",
     flexDirection: "column",
@@ -1405,8 +1533,8 @@ const styles: Record<string, CSSProperties> = {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    width: 36,
-    height: 36,
+    width: 42,
+    height: 42,
     padding: 0,
     border: "none",
     borderRadius: 10,
@@ -1440,20 +1568,23 @@ const styles: Record<string, CSSProperties> = {
   },
   sendButton: {
     flexShrink: 0,
-    width: 34,
-    height: 34,
+    width: 42,
+    height: 42,
     borderRadius: "50%",
     border: "none",
     background: "#fff",
     color: "#111",
-    fontWeight: 700,
-    fontSize: 17,
     cursor: "pointer",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    marginInlineStart: 2,
-    marginBottom: 1,
+    marginInlineStart: 4,
+    marginBottom: 0,
+  },
+  sendBusy: {
+    fontSize: 18,
+    fontWeight: 700,
+    lineHeight: 1,
   },
   sendButtonDisabled: {
     opacity: 0.35,
@@ -1489,19 +1620,18 @@ const styles: Record<string, CSSProperties> = {
     padding: "10px 16px",
     borderBottom: "1px solid var(--border)",
   },
-  previewRefreshButton: {
-    width: 34,
-    height: 34,
+  previewToolbarIconButton: {
+    width: 40,
+    height: 40,
     flexShrink: 0,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: 999,
-    border: "1px solid var(--border)",
-    background: "var(--surface)",
+    padding: 0,
+    border: "none",
+    borderRadius: 8,
+    background: "transparent",
     color: "var(--text)",
-    fontSize: 18,
-    lineHeight: 1,
     cursor: "pointer",
   },
   previewModeToggle: {
@@ -1525,7 +1655,20 @@ const styles: Record<string, CSSProperties> = {
     background: "var(--surface-elevated)",
     color: "var(--text)",
   },
-  previewOpenTab: { marginInlineStart: "auto", fontSize: 13, color: "var(--accent)" },
+  previewOpenTab: {
+    marginInlineStart: "auto",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 40,
+    height: 40,
+    padding: 0,
+    border: "none",
+    borderRadius: 8,
+    background: "transparent",
+    color: "var(--text)",
+    textDecoration: "none",
+  },
   previewFrameWrap: {
     display: "flex",
     justifyContent: "center",

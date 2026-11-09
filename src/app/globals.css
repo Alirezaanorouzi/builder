@@ -85,6 +85,32 @@ button:disabled {
     max(12px, env(safe-area-inset-right, 0px));
 }
 
+.app-header-over-setup {
+  position: relative;
+  z-index: 3;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.42) 0%, transparent 100%);
+  border-bottom: none;
+}
+
+.app-setup-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: var(--app-max-width);
+  margin-inline: auto;
+  height: 100dvh;
+  height: 100svh;
+}
+
+.app-setup-overlay > * {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
 .app-main,
 .app-preview {
   flex: 1;
@@ -153,6 +179,41 @@ button:disabled {
     max(16px, env(safe-area-inset-right, 0px))
     max(24px, env(safe-area-inset-bottom, 0px))
     max(16px, env(safe-area-inset-left, 0px));
+}
+
+.upgrade-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--foreground) 12%, transparent);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.upgrade-bar__countdown {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.upgrade-bar__link {
+  flex-shrink: 0;
+  font-weight: 600;
+  text-decoration: none;
+  color: inherit;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: var(--foreground);
+  color: var(--background);
+}
+
+.upgrade-bar__link:hover {
+  opacity: 0.92;
 }
 
 @media (max-width: 420px) {

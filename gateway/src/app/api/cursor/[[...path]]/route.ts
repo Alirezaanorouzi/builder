@@ -20,6 +20,9 @@ function cursorBasicAuth(): string {
   return `Basic ${Buffer.from(`${key}:`, "utf8").toString("base64")}`;
 }
 
+const AGENT_ID_RE = /^bc-[0-9a-f-]{36}$/i;
+const RUN_ID_RE = /^run-[0-9a-f-]{36}$/i;
+
 /** Allow-listed Cursor Agent API paths only. */
 function isAllowedPath(method: string, relPath: string): boolean {
   const p = relPath.replace(/^\/+|\/+$/g, "");
@@ -28,7 +31,30 @@ function isAllowedPath(method: string, relPath: string): boolean {
   if (/^v1\/agents\/[^/]+\/runs\/[^/]+$/.test(p) && method === "GET") return true;
   if (/^v1\/agents\/[^/]+\/runs\/[^/]+\/stream$/.test(p) && method === "GET") return true;
   if (/^v1\/agents\/[^/]+\/runs\/[^/]+\/cancel$/.test(p) && method === "POST") return true;
+  if (/^v1\/agents\/[^/]+\/usage$/.test(p) && method === "GET") return true;
   return false;
+}
+
+function validateUsageQuery(req: Request, relPath: string): Response | null {
+  const p = relPath.replace(/^\/+|\/+$/g, "");
+  const usageMatch = p.match(/^v1\/agents\/([^/]+)\/usage$/);
+  if (!usageMatch) return null;
+
+  const agentId = usageMatch[1]!;
+  if (!AGENT_ID_RE.test(agentId)) {
+    return new Response("Invalid agent id", { status: 400 });
+  }
+
+  const url = new URL(req.url);
+  const keys = [...url.searchParams.keys()];
+  if (keys.length !== 1 || keys[0] !== "runId") {
+    return new Response("Only runId query parameter is allowed", { status: 400 });
+  }
+  const runId = url.searchParams.get("runId")?.trim() ?? "";
+  if (!RUN_ID_RE.test(runId)) {
+    return new Response("Invalid runId", { status: 400 });
+  }
+  return null;
 }
 
 function unauthorized() {
@@ -63,6 +89,9 @@ async function handleProxy(req: Request, segments: string[], method: string) {
   if (!isAllowedPath(method, relPath)) {
     return new Response("Not Found", { status: 404 });
   }
+
+  const usageQueryError = method === "GET" ? validateUsageQuery(req, relPath) : null;
+  if (usageQueryError) return usageQueryError;
 
   const url = `${CURSOR_ORIGIN}/${relPath}${new URL(req.url).search}`;
 

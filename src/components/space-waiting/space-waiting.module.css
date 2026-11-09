@@ -44,7 +44,15 @@
 
 .backdropImageSetup {
   object-fit: cover;
-  object-position: center 38%;
+  object-position: center top;
+}
+
+@media (max-width: 520px) {
+  .backdropImageSetup {
+    object-position: center 22%;
+    transform: scale(1.06);
+    transform-origin: center top;
+  }
 }
 
 .lightBloom {
