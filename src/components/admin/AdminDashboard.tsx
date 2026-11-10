@@ -52,23 +52,35 @@ export function AdminDashboard() {
   const [messages, setMessages] = useState<MessageRow[]>([]);
   const [flags, setFlags] = useState<FlagRow[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const fetchAdminJson = async <T,>(url: string): Promise<T> => {
+    const res = await fetch(url, { credentials: "include", cache: "no-store" });
+    const data = (await res.json()) as T & { error?: string };
+    if (!res.ok) {
+      throw new Error(data.error ?? `خطا (${res.status})`);
+    }
+    return data;
+  };
 
   const load = useCallback(async () => {
     setError(null);
+    setLoading(true);
     try {
       const [ov, us, msg, fl] = await Promise.all([
-        fetch("/api/admin/metrics/overview").then((r) => r.json()),
-        fetch("/api/admin/metrics/users?limit=50").then((r) => r.json()),
-        fetch("/api/admin/messages?limit=20").then((r) => r.json()),
-        fetch("/api/admin/flags").then((r) => r.json()),
+        fetchAdminJson<Overview>("/api/admin/metrics/overview"),
+        fetchAdminJson<{ users?: UserRow[] }>("/api/admin/metrics/users?limit=50"),
+        fetchAdminJson<{ messages?: MessageRow[] }>("/api/admin/messages?limit=20"),
+        fetchAdminJson<{ flags?: FlagRow[] }>("/api/admin/flags"),
       ]);
-      if (ov.error) throw new Error(ov.error);
       setOverview(ov);
       setUsers(us.users ?? []);
       setMessages(msg.messages ?? []);
       setFlags(fl.flags ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "بارگذاری ناموفق");
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -77,11 +89,17 @@ export function AdminDashboard() {
   }, [load]);
 
   const toggleFlag = async (key: string, enabled: boolean) => {
-    await fetch("/api/admin/flags", {
+    const res = await fetch("/api/admin/flags", {
       method: "PATCH",
+      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ key, enabled }),
     });
+    if (!res.ok) {
+      const data = (await res.json()) as { error?: string };
+      setError(data.error ?? "تغییر پرچم ناموفق بود");
+      return;
+    }
     void load();
   };
 
@@ -97,8 +115,13 @@ export function AdminDashboard() {
       <header style={styles.header}>
         <h1 style={{ margin: 0, fontSize: 20 }}>پنل ادمین — اندازه‌گیری MVP</h1>
         <div style={{ display: "flex", gap: 8 }}>
-          <button type="button" style={styles.btnGhost} onClick={() => void load()}>
-            بروزرسانی
+          <button
+            type="button"
+            style={styles.btnGhost}
+            disabled={loading}
+            onClick={() => void load()}
+          >
+            {loading ? "در حال بارگذاری…" : "بروزرسانی"}
           </button>
           <button type="button" style={styles.btnGhost} onClick={() => void signOut()}>
             خروج

@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { isPreviewUnlocked } from "@/lib/preview-gate";
 import { SHARE_COPY_EVENTS, isProductEventName, type ProductEventName } from "@/lib/product-events";
-import { msBetween, northStarRate, userHasNorthStar, type NorthStarCounts } from "@/lib/funnel-metrics";
+import { msBetween, northStarRate, type NorthStarCounts } from "@/lib/funnel-metrics";
 import type { BuildRunStatus, Prisma } from "@prisma/client";
 
 const MAX_EVENTS_PER_REQUEST = 20;
@@ -56,10 +56,7 @@ export async function getMetricsOverview() {
     }),
   ]);
 
-  const funnelUserRows = await buildUserFunnelRows({ limit: 10_000, offset: 0 });
-  const activatedSharers = funnelUserRows.users.filter((u) =>
-    userHasNorthStar({ hasPreviewReady: u.hasPreviewReady, hasCopyOrShare: u.copyShareCount > 0 })
-  ).length;
+  const activatedSharers = await countActivatedSharersTotal();
 
   const counts: NorthStarCounts = {
     registered,
@@ -111,6 +108,19 @@ async function dailyActivatedSharers(from: Date, to: Date) {
     cursor = next;
   }
   return days;
+}
+
+async function countActivatedSharersTotal(): Promise<number> {
+  const sharers = await prisma.productEvent.findMany({
+    where: { name: { in: [...SHARE_COPY_EVENTS] } },
+    select: { userId: true },
+    distinct: ["userId"],
+  });
+  let n = 0;
+  for (const { userId } of sharers) {
+    if (await userHasPreviewReady(userId)) n += 1;
+  }
+  return n;
 }
 
 async function countActivatedSharersInWindow(from: Date, to: Date) {
