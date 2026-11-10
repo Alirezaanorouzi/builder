@@ -1,6 +1,6 @@
 import { requireAdminSession } from "@/lib/admin-auth";
 import { HttpError } from "@/lib/http-error";
-import { updateUserAsAdmin } from "@/services/user.service";
+import { deleteUserAsAdmin, updateUserAsAdmin } from "@/services/user.service";
 import type { UserAccountStatus, UserRole } from "@prisma/client";
 
 export const runtime = "nodejs";
@@ -13,6 +13,17 @@ function jsonError(e: unknown): Response {
   }
   const message = e instanceof Error ? e.message : "Server error";
   return Response.json({ error: message }, { status: 500 });
+}
+
+export async function DELETE(_req: Request, { params }: Params) {
+  try {
+    await requireAdminSession();
+    const { id } = await params;
+    const removed = await deleteUserAsAdmin(id);
+    return Response.json({ ok: true, user: removed });
+  } catch (e) {
+    return jsonError(e);
+  }
 }
 
 export async function PATCH(req: Request, { params }: Params) {

@@ -17,6 +17,7 @@ type Overview = {
 };
 
 type UserRow = {
+  userId: string;
   email: string;
   hasSite: boolean;
   msToFirstMessage: number | null;
@@ -87,6 +88,22 @@ export function AdminDashboard() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const removeUser = async (userId: string, email: string) => {
+    const ok = window.confirm(`کاربر ${email} و همهٔ داده‌هایش از پایگاه داده حذف شوند؟`);
+    if (!ok) return;
+    setError(null);
+    const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}`, {
+      method: "DELETE",
+      credentials: "include",
+    });
+    const data = (await res.json()) as { error?: string };
+    if (!res.ok) {
+      setError(data.error ?? "حذف ناموفق بود");
+      return;
+    }
+    void load();
+  };
 
   const toggleFlag = async (key: string, enabled: boolean) => {
     const res = await fetch("/api/admin/flags", {
@@ -162,11 +179,12 @@ export function AdminDashboard() {
                 <th>تب پیش‌نمایش</th>
                 <th>کپی/اشتراک</th>
                 <th>توکن امروز</th>
+                <th>حذف</th>
               </tr>
             </thead>
             <tbody>
               {users.map((u) => (
-                <tr key={u.email}>
+                <tr key={u.userId}>
                   <td dir="ltr">{u.email}</td>
                   <td>{u.hasSite ? "✓" : "—"}</td>
                   <td>{fmtMs(u.msToFirstMessage)}</td>
@@ -175,6 +193,16 @@ export function AdminDashboard() {
                   <td>{u.previewTabOpens}</td>
                   <td>{u.copyShareCount}</td>
                   <td>{u.tokensToday}</td>
+                  <td>
+                    <button
+                      type="button"
+                      style={styles.btnDanger}
+                      disabled={loading}
+                      onClick={() => void removeUser(u.userId, u.email)}
+                    >
+                      حذف
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -270,6 +298,15 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid var(--border)",
     background: "transparent",
     color: "var(--text)",
+    cursor: "pointer",
+  },
+  btnDanger: {
+    padding: "4px 10px",
+    borderRadius: 8,
+    border: "1px solid #7a3030",
+    background: "transparent",
+    color: "#ffb4b4",
+    fontSize: 12,
     cursor: "pointer",
   },
   msgRow: {

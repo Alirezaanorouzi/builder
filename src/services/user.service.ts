@@ -95,6 +95,19 @@ export async function listUsersForAdmin(options?: { limit?: number; offset?: num
   return { users, total, limit, offset };
 }
 
+/** Hard-delete user and cascaded rows (sites, runs, sessions, analytics). */
+export async function deleteUserAsAdmin(userId: string) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, email: true },
+  });
+  if (!user) {
+    throw new HttpError("User not found", 404);
+  }
+  await prisma.user.delete({ where: { id: userId } });
+  return { id: user.id, email: user.email };
+}
+
 export async function updateUserAsAdmin(
   userId: string,
   patch: {

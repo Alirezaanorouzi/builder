@@ -12,11 +12,11 @@ export function AuthPrompt() {
           Sign in to provision your GitHub repo, connect Vercel, and chat with the build agent.
         </p>
         <div style={styles.actions}>
-          <Link href="/sign-in" style={styles.primary}>
-            Sign in
-          </Link>
-          <Link href="/sign-in?mode=sign-up" style={styles.secondary}>
+          <Link href="/sign-in?mode=sign-up" style={styles.primary}>
             Create account
+          </Link>
+          <Link href="/sign-in?mode=sign-in" style={styles.secondary}>
+            Sign in
           </Link>
         </div>
       </div>

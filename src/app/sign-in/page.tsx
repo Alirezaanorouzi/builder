@@ -12,13 +12,14 @@ function SignInPageInner() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
-  const [mode, setMode] = useState<"sign-in" | "sign-up">("sign-in");
+  const [mode, setMode] = useState<"sign-in" | "sign-up">("sign-up");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (searchParams.get("mode") === "sign-up") {
-      setMode("sign-up");
+    const m = searchParams.get("mode");
+    if (m === "sign-in" || m === "sign-up") {
+      setMode(m);
     }
   }, [searchParams]);
 
