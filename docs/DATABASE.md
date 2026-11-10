@@ -65,6 +65,8 @@ Env: `WORKER_MODE` (`all` | `builds` | `provisioning`), `WORKER_ID`, `WORKER_POL
 
 After deploy, run migrations so `ProductEvent` and `FeatureFlag` exist (`npm run db:migrate` or Liara start migrate).
 
+After editing `src/lib/db/schema.prisma` or migrations, run **`npm run db:sync-assets`** and commit **`prisma-assets.mjs`** — Liara build restores schema from that file.
+
 ## Optional local SQLite (historical)
 
 Older commits used `file:./dev.db`. After switching to Postgres, create a **fresh** Liara or Docker database — do not point Postgres at an old SQLite file.
