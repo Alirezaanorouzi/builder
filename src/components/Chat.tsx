@@ -177,6 +177,28 @@ function PreviewExternalLinkIcon() {
   );
 }
 
+function PreviewShareNodesIcon() {
+  return (
+    <svg
+      width={PREVIEW_TOOLBAR_ICON}
+      height={PREVIEW_TOOLBAR_ICON}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <circle cx="7" cy="12" r="2.75" />
+      <circle cx="17" cy="6" r="2.75" />
+      <circle cx="17" cy="18" r="2.75" />
+      <path d="M9.5 11.2 14.2 7.2" />
+      <path d="M9.5 12.8 14.2 16.8" />
+    </svg>
+  );
+}
+
 export function Chat() {
   const router = useRouter();
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -200,6 +222,8 @@ export function Chat() {
   });
   const [accountOpen, setAccountOpen] = useState(false);
   const [signOutConfirm, setSignOutConfirm] = useState(false);
+  const [previewLinkMenuOpen, setPreviewLinkMenuOpen] = useState(false);
+  const previewLinkMenuRef = useRef<HTMLDivElement>(null);
   const [buildWaitStartedAt, setBuildWaitStartedAt] = useState<number>(() => Date.now());
   const [previewRefreshKey, setPreviewRefreshKey] = useState(0);
   const [previewPublishing, setPreviewPublishing] = useState(false);
@@ -793,6 +817,21 @@ export function Chat() {
     if (!accountOpen) setSignOutConfirm(false);
   }, [accountOpen]);
 
+  useEffect(() => {
+    if (!previewLinkMenuOpen) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (previewLinkMenuRef.current && !previewLinkMenuRef.current.contains(e.target as Node)) {
+        setPreviewLinkMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [previewLinkMenuOpen]);
+
+  useEffect(() => {
+    if (activeTab !== "preview") setPreviewLinkMenuOpen(false);
+  }, [activeTab]);
+
   const toggleActivityExpanded = (buildRunId: string) => {
     const container = messagesScrollRef.current;
     const scrollTop = container?.scrollTop ?? 0;
@@ -1221,41 +1260,69 @@ export function Chat() {
                     موبایل
               </button>
             </div>
-                {featureFlags.preview_copy_button !== false ? (
-                  <button
-                    type="button"
-                    style={styles.previewToolbarIconButton}
-                    aria-label="کپی لینک سایت"
-                    title="کپی لینک"
-                    onClick={() => void copyPreviewUrl()}
+                <div style={styles.previewLinkActions}>
+                  {(featureFlags.preview_copy_button !== false ||
+                    featureFlags.preview_share_button !== false) && (
+                    <div ref={previewLinkMenuRef} style={styles.previewLinkMenuWrap}>
+                      <button
+                        type="button"
+                        style={{
+                          ...styles.previewToolbarIconButton,
+                          ...(previewLinkMenuOpen ? styles.previewLinkMenuBtnActive : {}),
+                        }}
+                        aria-expanded={previewLinkMenuOpen}
+                        aria-label="اشتراک و کپی لینک"
+                        title="اشتراک و کپی"
+                        onClick={() => setPreviewLinkMenuOpen((o) => !o)}
+                      >
+                        <PreviewShareNodesIcon />
+                      </button>
+                      {previewLinkMenuOpen ? (
+                        <div style={styles.previewLinkRollup} role="menu">
+                          {featureFlags.preview_copy_button !== false ? (
+                            <button
+                              type="button"
+                              role="menuitem"
+                              style={styles.previewLinkRollupItem}
+                              onClick={() => {
+                                setPreviewLinkMenuOpen(false);
+                                void copyPreviewUrl();
+                              }}
+                            >
+                              کپی لینک
+                            </button>
+                          ) : null}
+                          {featureFlags.preview_share_button !== false &&
+                          typeof navigator !== "undefined" &&
+                          "share" in navigator ? (
+                            <button
+                              type="button"
+                              role="menuitem"
+                              style={styles.previewLinkRollupItem}
+                              onClick={() => {
+                                setPreviewLinkMenuOpen(false);
+                                void sharePreviewUrl();
+                              }}
+                            >
+                              اشتراک
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
+                  <a
+                    href={previewUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={styles.previewOpenTab}
+                    aria-label="باز کردن در تب جدید"
+                    title="باز کردن در تب جدید"
+                    onClick={openPreviewExternal}
                   >
-                    ⎘
-                  </button>
-                ) : null}
-                {featureFlags.preview_share_button !== false &&
-                typeof navigator !== "undefined" &&
-                "share" in navigator ? (
-                  <button
-                    type="button"
-                    style={styles.previewToolbarIconButton}
-                    aria-label="اشتراک لینک"
-                    title="اشتراک"
-                    onClick={() => void sharePreviewUrl()}
-                  >
-                    ↗
-                  </button>
-                ) : null}
-                <a
-                  href={previewUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={styles.previewOpenTab}
-                  aria-label="باز کردن در تب جدید"
-                  title="باز کردن در تب جدید"
-                  onClick={openPreviewExternal}
-                >
-                  <PreviewExternalLinkIcon />
-            </a>
+                    <PreviewExternalLinkIcon />
+                  </a>
+                </div>
           </div>
           <div
                 className="app-preview-frame"
@@ -1779,8 +1846,46 @@ const styles: Record<string, CSSProperties> = {
     background: "var(--surface-elevated)",
     color: "var(--text)",
   },
-  previewOpenTab: {
+  previewLinkActions: {
     marginInlineStart: "auto",
+    display: "flex",
+    alignItems: "center",
+    gap: 2,
+    flexShrink: 0,
+  },
+  previewLinkMenuWrap: {
+    position: "relative",
+  },
+  previewLinkMenuBtnActive: {
+    background: "var(--surface-elevated)",
+  },
+  previewLinkRollup: {
+    position: "absolute",
+  insetInlineEnd: 0,
+    top: "calc(100% + 6px)",
+    zIndex: 30,
+    minWidth: 148,
+    padding: 6,
+    borderRadius: 10,
+    border: "1px solid var(--border)",
+    background: "var(--surface-elevated)",
+    boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
+  },
+  previewLinkRollupItem: {
+    width: "100%",
+    padding: "10px 12px",
+    borderRadius: 8,
+    border: "none",
+    background: "transparent",
+    color: "var(--text)",
+    fontSize: 14,
+    textAlign: "start",
+    cursor: "pointer",
+  },
+  previewOpenTab: {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
