@@ -194,7 +194,7 @@ export function Chat() {
   const [previewMode, setPreviewMode] = useState<"desktop" | "mobile">("mobile");
   const [activeTab, setActiveTab] = useState<"build" | "preview">("build");
   const [accountOpen, setAccountOpen] = useState(false);
-  const [creatingNewSite, setCreatingNewSite] = useState(false);
+  const [signOutConfirm, setSignOutConfirm] = useState(false);
   const [buildWaitStartedAt, setBuildWaitStartedAt] = useState<number>(() => Date.now());
   const [previewRefreshKey, setPreviewRefreshKey] = useState(0);
   const [previewPublishing, setPreviewPublishing] = useState(false);
@@ -734,6 +734,10 @@ export function Chat() {
     return () => document.removeEventListener("mousedown", onDocClick);
   }, [accountOpen]);
 
+  useEffect(() => {
+    if (!accountOpen) setSignOutConfirm(false);
+  }, [accountOpen]);
+
   const toggleActivityExpanded = (buildRunId: string) => {
     const container = messagesScrollRef.current;
     const scrollTop = container?.scrollTop ?? 0;
@@ -770,50 +774,6 @@ export function Chat() {
       setProvisioningError(e instanceof Error ? e.message : "تلاش مجدد ناموفق بود");
     } finally {
       setRetryingProvision(false);
-    }
-  };
-
-  const handleNewWebsite = async () => {
-    if (busy || creatingNewSite) return;
-    const ok = window.confirm(
-      "سایت جدید یک مخزن و پیش‌نمایش جدا می‌سازد. سایت فعلی در حساب شما می‌ماند. ادامه می‌دهید؟"
-    );
-    if (!ok) return;
-    setAccountOpen(false);
-    setCreatingNewSite(true);
-    closeStream();
-    setBusy(false);
-    setPreviewPublishing(false);
-    try {
-      const res = await fetch("/api/sites", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ displayName: "سایت جدید" }),
-      });
-      const data = (await res.json()) as { error?: string; site?: SiteSummary };
-      if (!res.ok || !data.site) {
-        appendError(data.error ?? "ایجاد سایت جدید ناموفق بود");
-        return;
-      }
-      const site = data.site;
-      historyLoadedForSiteRef.current = null;
-      localStorage.removeItem(BUILD_RUN_KEY);
-      localStorage.removeItem(CHAT_SESSION_KEY);
-      setItems([]);
-      setPreviewUrl(null);
-      setChatSessionId(null);
-      setSiteId(site.id);
-      setSiteStatus(site.status);
-      setProvisioningStep(site.provisioningStep ?? null);
-      setProvisioningError(site.provisioningError ?? null);
-      localStorage.setItem(SITE_ID_KEY, site.id);
-      if (site.status === "active" && site.productionUrl) {
-        setPreviewUrl(site.productionUrl);
-      }
-    } catch (e) {
-      appendError(e instanceof Error ? e.message : "خطای شبکه");
-    } finally {
-      setCreatingNewSite(false);
     }
   };
 
@@ -968,15 +928,6 @@ export function Chat() {
                   <p style={styles.accountMenuEmail} dir="ltr">
                 {userEmail}
                   </p>
-              <button
-                type="button"
-                    role="menuitem"
-                    style={styles.accountMenuItem}
-                    disabled={creatingNewSite}
-                    onClick={() => void handleNewWebsite()}
-                  >
-                    {creatingNewSite ? "در حال ساخت سایت…" : "سایت جدید"}
-                  </button>
                   <a
                     href="https://t.me/+WsUMm76hSOo4MDQ0"
                     target="_blank"
@@ -987,18 +938,39 @@ export function Chat() {
                   >
                     گروه تلگرام
                   </a>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    style={styles.accountMenuSignOut}
-                disabled={busy || signingOut}
-                    onClick={() => {
-                      setAccountOpen(false);
-                      void handleSignOut();
-                    }}
-              >
-                    {signingOut ? "در حال خروج…" : "خروج"}
-              </button>
+                  {signOutConfirm ? (
+                    <div style={styles.accountSignOutRollup}>
+                      <p style={styles.accountSignOutQuestion}>از حساب خود خارج میشوید؟</p>
+                      <div style={styles.accountSignOutActions}>
+                        <button
+                          type="button"
+                          style={styles.accountSignOutNo}
+                          disabled={signingOut}
+                          onClick={() => setSignOutConfirm(false)}
+                        >
+                          خیر
+                        </button>
+                        <button
+                          type="button"
+                          style={styles.accountSignOutYes}
+                          disabled={busy || signingOut}
+                          onClick={() => void handleSignOut()}
+                        >
+                          {signingOut ? "…" : "بله"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      style={styles.accountMenuSignOut}
+                      disabled={busy || signingOut}
+                      onClick={() => setSignOutConfirm(true)}
+                    >
+                      خروج
+                    </button>
+                  )}
             </div>
           )}
         </div>
@@ -1474,17 +1446,6 @@ const styles: Record<string, CSSProperties> = {
     color: "var(--muted)",
     wordBreak: "break-all",
   },
-  accountMenuItem: {
-    width: "100%",
-    padding: "8px 10px",
-    borderRadius: 8,
-    border: "1px solid var(--border)",
-    background: "transparent",
-    color: "var(--text)",
-    fontSize: 13,
-    cursor: "pointer",
-    marginBottom: 6,
-  },
   accountMenuLink: {
     display: "block",
     width: "100%",
@@ -1506,6 +1467,42 @@ const styles: Record<string, CSSProperties> = {
     border: "1px solid var(--border)",
     background: "transparent",
     color: "var(--text)",
+    fontSize: 13,
+    cursor: "pointer",
+  },
+  accountSignOutRollup: {
+    marginTop: 4,
+    paddingTop: 10,
+    borderTop: "1px solid var(--border)",
+  },
+  accountSignOutQuestion: {
+    margin: "0 0 10px",
+    fontSize: 13,
+    lineHeight: 1.5,
+    color: "var(--text)",
+    textAlign: "center",
+  },
+  accountSignOutActions: {
+    display: "flex",
+    gap: 8,
+  },
+  accountSignOutNo: {
+    flex: 1,
+    padding: "8px 10px",
+    borderRadius: 8,
+    border: "1px solid var(--border)",
+    background: "transparent",
+    color: "var(--text)",
+    fontSize: 13,
+    cursor: "pointer",
+  },
+  accountSignOutYes: {
+    flex: 1,
+    padding: "8px 10px",
+    borderRadius: 8,
+    border: "1px solid var(--border)",
+    background: "var(--accent-dim)",
+    color: "#fff",
     fontSize: 13,
     cursor: "pointer",
   },
