@@ -65,7 +65,12 @@ Env: `WORKER_MODE` (`all` | `builds` | `provisioning`), `WORKER_ID`, `WORKER_POL
 
 After deploy, run migrations so `ProductEvent` and `FeatureFlag` exist (`npm run db:migrate` or Liara start migrate).
 
-After editing `src/lib/db/schema.prisma` or migrations, run **`npm run db:sync-assets`** and commit **`prisma-assets.mjs`** — Liara build restores schema from that file.
+After editing `src/lib/db/schema.prisma` or migrations:
+
+1. **`npm run db:prepare`** — syncs `prisma-assets.mjs` and regenerates the Prisma client (fixes TS errors like missing `prisma.productEvent`).
+2. Commit **`prisma-assets.mjs`** — Liara build restores schema from that file.
+
+If `db:generate` fails with **ENOSPC**, free disk space on your machine and run `db:prepare` again.
 
 ## Optional local SQLite (historical)
 

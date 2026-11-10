@@ -30,6 +30,7 @@
     "db:migrate": "tsx scripts/prisma-cli.ts migrate dev",
     "db:push": "tsx scripts/prisma-cli.ts db push",
     "db:sync-assets": "node scripts/sync-prisma-assets.mjs",
+    "db:prepare": "npm run db:sync-assets && npm run db:generate",
     "test:quota": "node scripts/run-quota-tests.mjs",
     "test:funnel": "npx tsx --test src/lib/funnel-metrics.test.ts"
   },
