@@ -1,15 +1,23 @@
-import { jsonError, requireSessionUser } from "@/lib/access";
-import { requireAdminUser, updateUserAsAdmin } from "@/services/user.service";
+import { requireAdminSession } from "@/lib/admin-auth";
+import { HttpError } from "@/lib/http-error";
+import { updateUserAsAdmin } from "@/services/user.service";
 import type { UserAccountStatus, UserRole } from "@prisma/client";
 
 export const runtime = "nodejs";
 
 type Params = { params: Promise<{ id: string }> };
 
+function jsonError(e: unknown): Response {
+  if (e instanceof HttpError) {
+    return Response.json({ error: e.message }, { status: e.status });
+  }
+  const message = e instanceof Error ? e.message : "Server error";
+  return Response.json({ error: message }, { status: 500 });
+}
+
 export async function PATCH(req: Request, { params }: Params) {
   try {
-    const session = await requireSessionUser();
-    await requireAdminUser(session.id);
+    await requireAdminSession();
     const { id } = await params;
     const body = (await req.json()) as {
       role?: UserRole;

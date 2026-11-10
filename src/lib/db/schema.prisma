@@ -66,6 +66,7 @@ model User {
   sites            Site[]
   usage            UserUsage?
   runUsages        RunUsage[]
+  productEvents    ProductEvent[]
 
   @@index([accountStatus])
   @@index([role])
@@ -130,8 +131,9 @@ model Site {
 
   resources    SiteResources?
   chatSessions ChatSession[]
-  buildRuns    BuildRun[]
-  statusEvents SiteStatusEvent[]
+  buildRuns      BuildRun[]
+  statusEvents   SiteStatusEvent[]
+  productEvents  ProductEvent[]
 
   @@unique([userId, slug])
   @@index([userId])
@@ -262,4 +264,26 @@ model RunUsage {
 
   @@index([nextSyncAt])
   @@index([userId, createdAt])
+}
+
+model ProductEvent {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  siteId    String?
+  site      Site?    @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  name      String
+  props     Json?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([name, createdAt])
+  @@index([siteId, createdAt])
+}
+
+model FeatureFlag {
+  key         String   @id
+  enabled     Boolean  @default(false)
+  description String   @default("")
+  updatedAt   DateTime @updatedAt
 }

@@ -29,7 +29,8 @@
     "db:generate": "tsx scripts/prisma-cli.ts generate",
     "db:migrate": "tsx scripts/prisma-cli.ts migrate dev",
     "db:push": "tsx scripts/prisma-cli.ts db push",
-    "test:quota": "node scripts/run-quota-tests.mjs"
+    "test:quota": "node scripts/run-quota-tests.mjs",
+    "test:funnel": "npx tsx --test src/lib/funnel-metrics.test.ts"
   },
   "dependencies": {
     "@cursor/sdk": "^1.3.1",

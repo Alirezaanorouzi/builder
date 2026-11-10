@@ -1,12 +1,20 @@
-import { jsonError, requireSessionUser } from "@/lib/access";
-import { listUsersForAdmin, requireAdminUser } from "@/services/user.service";
+import { requireAdminSession } from "@/lib/admin-auth";
+import { HttpError } from "@/lib/http-error";
+import { listUsersForAdmin } from "@/services/user.service";
 
 export const runtime = "nodejs";
 
+function jsonError(e: unknown): Response {
+  if (e instanceof HttpError) {
+    return Response.json({ error: e.message }, { status: e.status });
+  }
+  const message = e instanceof Error ? e.message : "Server error";
+  return Response.json({ error: message }, { status: 500 });
+}
+
 export async function GET(req: Request) {
   try {
-    const session = await requireSessionUser();
-    await requireAdminUser(session.id);
+    await requireAdminSession();
     const url = new URL(req.url);
     const limit = Number(url.searchParams.get("limit") ?? 50);
     const offset = Number(url.searchParams.get("offset") ?? 0);

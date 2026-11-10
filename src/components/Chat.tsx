@@ -27,6 +27,7 @@ import {
   type AgentRunPhase,
   type RawActivityInput,
 } from "@/lib/agent-activity";
+import { trackAppOpenOnce, trackProductEvent } from "@/lib/analytics-client";
 import { DEFERRED_DEPLOY_CONFIRMATION } from "@/lib/build-user-messages";
 import { provisioningProgressPercent } from "@/lib/provisioning-progress";
 import { signOutBuilderAccount } from "@/lib/sign-out";
@@ -193,6 +194,10 @@ export function Chat() {
   const [retryingProvision, setRetryingProvision] = useState(false);
   const [previewMode, setPreviewMode] = useState<"desktop" | "mobile">("mobile");
   const [activeTab, setActiveTab] = useState<"build" | "preview">("build");
+  const [featureFlags, setFeatureFlags] = useState<Record<string, boolean>>({
+    preview_copy_button: true,
+    preview_share_button: true,
+  });
   const [accountOpen, setAccountOpen] = useState(false);
   const [signOutConfirm, setSignOutConfirm] = useState(false);
   const [buildWaitStartedAt, setBuildWaitStartedAt] = useState<number>(() => Date.now());
@@ -359,11 +364,39 @@ export function Chat() {
           productionShaBeforeDeployRef.current ??= active.productionCommitSha;
       }
     }
+    trackAppOpenOnce(active?.id);
     return active;
     } finally {
       setMeReady(true);
     }
   }, []);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch("/api/flags");
+        if (!res.ok) return;
+        const data = (await res.json()) as { flags?: Record<string, boolean> };
+        if (data.flags) setFeatureFlags((prev) => ({ ...prev, ...data.flags }));
+      } catch {
+        /* optional */
+      }
+    })();
+  }, []);
+
+  const selectTab = useCallback(
+    (tab: "build" | "preview") => {
+      setActiveTab(tab);
+      if (tab === "preview" && siteId) {
+        trackProductEvent("preview_tab_open", { siteId });
+      }
+    },
+    [siteId]
+  );
+
+  const openPreviewExternal = useCallback(() => {
+    if (siteId) trackProductEvent("preview_external_open", { siteId });
+  }, [siteId]);
 
   const closeStream = useCallback((keepPreviewWait = false) => {
     if (!keepPreviewWait) {
@@ -378,6 +411,28 @@ export function Chat() {
   const appendError = useCallback((text: string) => {
     setItems((prev) => [...prev, { id: newId(), kind: "error", text }]);
   }, []);
+
+  const copyPreviewUrl = useCallback(async () => {
+    if (!previewUrl || !siteId) return;
+    try {
+      await navigator.clipboard.writeText(previewUrl);
+      trackProductEvent("preview_link_copied", { siteId });
+    } catch {
+      appendError("کپی لینک ناموفق بود");
+    }
+  }, [appendError, previewUrl, siteId]);
+
+  const sharePreviewUrl = useCallback(async () => {
+    if (!previewUrl || !siteId) return;
+    try {
+      if (typeof navigator.share === "function") {
+        await navigator.share({ url: previewUrl, title: "سایت من" });
+        trackProductEvent("preview_link_shared", { siteId });
+      }
+    } catch {
+      /* user cancelled share */
+    }
+  }, [previewUrl, siteId]);
 
   const attachments = useChatAttachments(appendError, busy);
 
@@ -989,7 +1044,7 @@ export function Chat() {
                   ...styles.tab,
                   ...(activeTab === "preview" ? styles.tabActive : {}),
                 }}
-                onClick={() => setActiveTab("preview")}
+                onClick={() => selectTab("preview")}
               >
                 پیش‌نمایش
               </button>
@@ -1002,7 +1057,7 @@ export function Chat() {
                   ...styles.tab,
                   ...(activeTab === "build" ? styles.tabActive : {}),
                 }}
-                onClick={() => setActiveTab("build")}
+                onClick={() => selectTab("build")}
               >
                 ساخت
               </button>
@@ -1051,7 +1106,7 @@ export function Chat() {
             {items.length === 0 && (
               <p style={styles.placeholderHero}>چی تو ذهنته؟</p>
             )}
-            {renderChatItems(items, toggleActivityExpanded, setActiveTab, styles)}
+            {renderChatItems(items, toggleActivityExpanded, selectTab, styles)}
         </div>
 
           <footer className="app-composer" style={styles.footer}>
@@ -1166,6 +1221,30 @@ export function Chat() {
                     موبایل
               </button>
             </div>
+                {featureFlags.preview_copy_button !== false ? (
+                  <button
+                    type="button"
+                    style={styles.previewToolbarIconButton}
+                    aria-label="کپی لینک سایت"
+                    title="کپی لینک"
+                    onClick={() => void copyPreviewUrl()}
+                  >
+                    ⎘
+                  </button>
+                ) : null}
+                {featureFlags.preview_share_button !== false &&
+                typeof navigator !== "undefined" &&
+                "share" in navigator ? (
+                  <button
+                    type="button"
+                    style={styles.previewToolbarIconButton}
+                    aria-label="اشتراک لینک"
+                    title="اشتراک"
+                    onClick={() => void sharePreviewUrl()}
+                  >
+                    ↗
+                  </button>
+                ) : null}
                 <a
                   href={previewUrl}
                   target="_blank"
@@ -1173,6 +1252,7 @@ export function Chat() {
                   style={styles.previewOpenTab}
                   aria-label="باز کردن در تب جدید"
                   title="باز کردن در تب جدید"
+                  onClick={openPreviewExternal}
                 >
                   <PreviewExternalLinkIcon />
             </a>

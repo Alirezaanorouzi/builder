@@ -59,7 +59,11 @@ Env: `WORKER_MODE` (`all` | `builds` | `provisioning`), `WORKER_ID`, `WORKER_POL
 
 ## Admin users
 
-`ADMIN_EMAILS=comma,separated,emails` — promoted to `admin` on login. APIs: `GET/PATCH /api/admin/users`, `GET /api/admin/sites?status=provisioning`.
+`ADMIN_EMAIL` + `ADMIN_PASSWORD` — sign in at `/admin/sign-in` (separate from customer auth). Dashboard: North Star, funnel, messages, feature flags. APIs under `/api/admin/*` require the `admin_session` cookie.
+
+`ADMIN_EMAILS=comma,separated,emails` — legacy role promotion on customer login (optional).
+
+After deploy, run migrations so `ProductEvent` and `FeatureFlag` exist (`npm run db:migrate` or Liara start migrate).
 
 ## Optional local SQLite (historical)
 
