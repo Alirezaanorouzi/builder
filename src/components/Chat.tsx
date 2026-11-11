@@ -1148,7 +1148,7 @@ export function Chat({ developerPhone = "" }: ChatProps) {
               <SupportHeadphonesIcon />
             </button>
             {supportOpen && (
-              <div style={styles.supportMenu} role="menu">
+              <div style={styles.supportMenu} role="menu" dir="rtl">
                 <a
                   href={SUPPORT_TELEGRAM_GROUP_URL}
                   target="_blank"
@@ -1620,7 +1620,8 @@ const styles: Record<string, CSSProperties> = {
   supportMenu: {
     position: "absolute",
     top: "calc(100% + 8px)",
-    insetInlineStart: 0,
+    left: 0,
+    right: "auto",
     minWidth: 200,
     padding: 12,
     borderRadius: 12,
@@ -1628,7 +1629,6 @@ const styles: Record<string, CSSProperties> = {
     border: "1px solid var(--border)",
     boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
     zIndex: 20,
-    direction: "rtl",
   },
   tabGroup: {
     display: "inline-flex",
