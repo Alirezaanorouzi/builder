@@ -37,6 +37,10 @@ import {
   BUILDER_SITE_ID_KEY,
 } from "@/lib/builder-client-storage";
 import { UpgradeBar, type UsageView } from "@/components/UpgradeBar";
+import {
+  developerPhoneCallHref,
+  SUPPORT_TELEGRAM_GROUP_URL,
+} from "@/lib/support-links";
 
 type ChatItem =
   | {
@@ -177,6 +181,26 @@ function PreviewExternalLinkIcon() {
   );
 }
 
+const HEADER_SUPPORT_ICON = 18;
+
+function SupportHeadphonesIcon() {
+  return (
+    <svg
+      width={HEADER_SUPPORT_ICON}
+      height={HEADER_SUPPORT_ICON}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3" />
+    </svg>
+  );
+}
+
 function PreviewShareNodesIcon() {
   return (
     <svg
@@ -199,8 +223,13 @@ function PreviewShareNodesIcon() {
   );
 }
 
-export function Chat() {
+type ChatProps = {
+  developerPhone?: string;
+};
+
+export function Chat({ developerPhone = "" }: ChatProps) {
   const router = useRouter();
+  const developerCallHref = developerPhoneCallHref(developerPhone);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [siteId, setSiteId] = useState<string | null>(null);
   const [siteStatus, setSiteStatus] = useState<string | null>(null);
@@ -221,6 +250,7 @@ export function Chat() {
     preview_share_button: true,
   });
   const [accountOpen, setAccountOpen] = useState(false);
+  const [supportOpen, setSupportOpen] = useState(false);
   const [signOutConfirm, setSignOutConfirm] = useState(false);
   const [previewLinkMenuOpen, setPreviewLinkMenuOpen] = useState(false);
   const previewLinkMenuRef = useRef<HTMLDivElement>(null);
@@ -233,6 +263,7 @@ export function Chat() {
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const pendingScrollUserIdRef = useRef<string | null>(null);
   const accountRef = useRef<HTMLDivElement>(null);
+  const supportRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
   const seenEventIdsRef = useRef<Map<string, Set<string>>>(new Map());
   const activeBuildRunRef = useRef<string | null>(null);
@@ -814,6 +845,17 @@ export function Chat() {
   }, [accountOpen]);
 
   useEffect(() => {
+    if (!supportOpen) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (supportRef.current && !supportRef.current.contains(e.target as Node)) {
+        setSupportOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [supportOpen]);
+
+  useEffect(() => {
     if (!accountOpen) setSignOutConfirm(false);
   }, [accountOpen]);
 
@@ -1022,16 +1064,6 @@ export function Chat() {
                   <p style={styles.accountMenuEmail} dir="ltr">
                 {userEmail}
                   </p>
-                  <a
-                    href="https://t.me/+WsUMm76hSOo4MDQ0"
-                    target="_blank"
-                    rel="noreferrer"
-                    role="menuitem"
-                    style={styles.accountMenuLink}
-                    onClick={() => setAccountOpen(false)}
-                  >
-                    گروه تلگرام
-                  </a>
                   {signOutConfirm ? (
                     <div style={styles.accountSignOutRollup}>
                       <p style={styles.accountSignOutQuestion}>از حساب خود خارج میشوید؟</p>
@@ -1104,7 +1136,43 @@ export function Chat() {
           </div>
         )}
 
-        <div style={styles.headerEnd} aria-hidden />
+        <div style={styles.headerEnd}>
+          <div ref={supportRef} style={styles.supportWrap}>
+            <button
+              type="button"
+              style={styles.supportButton}
+              aria-expanded={supportOpen}
+              aria-label="پشتیبانی و تماس"
+              onClick={() => setSupportOpen((o) => !o)}
+            >
+              <SupportHeadphonesIcon />
+            </button>
+            {supportOpen && (
+              <div style={styles.supportMenu} role="menu">
+                <a
+                  href={SUPPORT_TELEGRAM_GROUP_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  role="menuitem"
+                  style={styles.accountMenuLink}
+                  onClick={() => setSupportOpen(false)}
+                >
+                  گروه تلگرام
+                </a>
+                {developerCallHref ? (
+                  <a
+                    href={developerCallHref}
+                    role="menuitem"
+                    style={{ ...styles.accountMenuLink, marginBottom: 0 }}
+                    onClick={() => setSupportOpen(false)}
+                  >
+                    تماس با برنامه‌نویس
+                  </a>
+                ) : null}
+              </div>
+            )}
+          </div>
+        </div>
       </header>
 
       {showAccountSetup ? (
@@ -1529,7 +1597,38 @@ const styles: Record<string, CSSProperties> = {
     justifySelf: "center",
   },
   headerEnd: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-start",
     minWidth: 0,
+    direction: "ltr",
+  },
+  supportWrap: { position: "relative" },
+  supportButton: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 36,
+    height: 36,
+    padding: 0,
+    borderRadius: "50%",
+    border: "1px solid var(--border)",
+    background: "var(--surface-elevated)",
+    color: "var(--muted)",
+    cursor: "pointer",
+  },
+  supportMenu: {
+    position: "absolute",
+    top: "calc(100% + 8px)",
+    insetInlineStart: 0,
+    minWidth: 200,
+    padding: 12,
+    borderRadius: 12,
+    background: "var(--surface-elevated)",
+    border: "1px solid var(--border)",
+    boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
+    zIndex: 20,
+    direction: "rtl",
   },
   tabGroup: {
     display: "inline-flex",

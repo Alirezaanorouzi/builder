@@ -60,6 +60,7 @@ const KEYS = [
   "WORKER_POLL_MS",
   "PROVISIONING_LEASE_MINUTES",
   "INLINE_BUILD_WORKER",
+  "PHONE_NUMBER_DEVELOPER",
 ];
 
 function rewriteValue(key, raw) {

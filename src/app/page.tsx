@@ -8,5 +8,6 @@ export default async function Home() {
   if (!session?.user) {
     redirect("/sign-in");
   }
-  return <Chat />;
+  const developerPhone = process.env.PHONE_NUMBER_DEVELOPER?.trim() ?? "";
+  return <Chat developerPhone={developerPhone} />;
 }
