@@ -1214,16 +1214,16 @@ export function Chat({ developerPhone = "" }: ChatProps) {
             }}
           >
             {items.length === 0 && (
-              <div style={styles.placeholderHeroRow}>
-                <p style={styles.placeholderHero}>چی تو ذهنته؟</p>
+              <div className="chat-placeholder-hero">
                 <Image
                   src={CHAT_HERO_SPARK_SRC}
                   alt=""
-                  width={40}
-                  height={40}
+                  width={48}
+                  height={48}
                   priority
-                  style={styles.placeholderHeroLogo}
+                  className="chat-placeholder-hero__logo"
                 />
+                <p className="chat-placeholder-hero__text">چی تو ذهنته؟</p>
               </div>
             )}
             {renderChatItems(items, toggleActivityExpanded, selectTab, styles)}
@@ -1803,28 +1803,6 @@ const styles: Record<string, CSSProperties> = {
     lineHeight: 1.55,
   },
   placeholder: { color: "var(--muted)", fontSize: 14, lineHeight: 1.6, margin: 0 },
-  placeholderHeroRow: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 12,
-    flexWrap: "wrap",
-  },
-  placeholderHeroLogo: {
-    display: "block",
-    width: 44,
-    height: 44,
-    objectFit: "contain",
-    flexShrink: 0,
-  },
-  placeholderHero: {
-    margin: 0,
-    textAlign: "center",
-    color: "var(--muted)",
-    fontSize: "clamp(20px, 5.5vw, 24px)",
-    fontWeight: 500,
-    lineHeight: 1.5,
-  },
   footer: {
     display: "flex",
     flexDirection: "column",
