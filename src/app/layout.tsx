@@ -12,6 +12,10 @@ const vazirmatn = Vazirmatn({
 export const metadata: Metadata = {
   title: "سازنده وب‌سایت",
   description: "ساخت و ویرایش سایت با هوش مصنوعی",
+  icons: {
+    icon: [{ url: "/branding/app-logo.png", type: "image/png" }],
+    apple: [{ url: "/branding/app-logo.png", type: "image/png" }],
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",

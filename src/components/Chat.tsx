@@ -9,6 +9,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { AgentActivity } from "@/components/AgentActivity";
 import { ChatMarkdown } from "@/components/chat/ChatMarkdown";
@@ -57,6 +58,7 @@ type ChatItem =
 const CHAT_SESSION_KEY = BUILDER_CHAT_SESSION_KEY;
 const SITE_ID_KEY = BUILDER_SITE_ID_KEY;
 const BUILD_RUN_KEY = BUILDER_BUILD_RUN_KEY;
+const APP_LOGO_SRC = "/branding/app-logo.png";
 
 
 const PREVIEW_WAIT_BUILDING = "در حال ساخت سایت…";
@@ -1211,7 +1213,17 @@ export function Chat({ developerPhone = "" }: ChatProps) {
             }}
           >
             {items.length === 0 && (
-              <p style={styles.placeholderHero}>چی تو ذهنته؟</p>
+              <div style={styles.placeholderHeroRow}>
+                <p style={styles.placeholderHero}>چی تو ذهنته؟</p>
+                <Image
+                  src={APP_LOGO_SRC}
+                  alt=""
+                  width={44}
+                  height={44}
+                  priority
+                  style={styles.placeholderHeroLogo}
+                />
+              </div>
             )}
             {renderChatItems(items, toggleActivityExpanded, selectTab, styles)}
         </div>
@@ -1790,6 +1802,20 @@ const styles: Record<string, CSSProperties> = {
     lineHeight: 1.55,
   },
   placeholder: { color: "var(--muted)", fontSize: 14, lineHeight: 1.6, margin: 0 },
+  placeholderHeroRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+    flexWrap: "wrap",
+  },
+  placeholderHeroLogo: {
+    display: "block",
+    width: 44,
+    height: 44,
+    objectFit: "contain",
+    flexShrink: 0,
+  },
   placeholderHero: {
     margin: 0,
     textAlign: "center",

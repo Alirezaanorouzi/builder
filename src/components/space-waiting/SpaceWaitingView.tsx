@@ -11,6 +11,7 @@ export type SpaceWaitingVariant = "setup" | "preview";
 
 type Props = {
   message: string;
+  subMessage?: string;
   variant?: SpaceWaitingVariant;
   /** When set, shows a Persian elapsed timer (mm:ss). */
   startedAtMs?: number;
@@ -28,6 +29,7 @@ function formatElapsedPersian(ms: number): string {
 
 export function SpaceWaitingView({
   message,
+  subMessage,
   variant = "preview",
   startedAtMs,
   setupProgress = 0,
@@ -92,6 +94,7 @@ export function SpaceWaitingView({
         }
       >
         <p className={styles.message}>{message}</p>
+        {subMessage ? <p className={styles.subMessage}>{subMessage}</p> : null}
         {startedAtMs != null && (
           <p className={styles.elapsed}>{formatElapsedPersian(elapsedMs)}</p>
         )}
