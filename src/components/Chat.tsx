@@ -58,7 +58,8 @@ type ChatItem =
 const CHAT_SESSION_KEY = BUILDER_CHAT_SESSION_KEY;
 const SITE_ID_KEY = BUILDER_SITE_ID_KEY;
 const BUILD_RUN_KEY = BUILDER_BUILD_RUN_KEY;
-const APP_LOGO_SRC = "/branding/app-logo.png";
+/** Spark mark beside empty-state copy — favicon uses B logo in /branding/app-logo.png */
+const CHAT_HERO_SPARK_SRC = "/branding/chat-hero-spark.png";
 
 
 const PREVIEW_WAIT_BUILDING = "در حال ساخت سایت…";
@@ -1216,10 +1217,10 @@ export function Chat({ developerPhone = "" }: ChatProps) {
               <div style={styles.placeholderHeroRow}>
                 <p style={styles.placeholderHero}>چی تو ذهنته؟</p>
                 <Image
-                  src={APP_LOGO_SRC}
+                  src={CHAT_HERO_SPARK_SRC}
                   alt=""
-                  width={44}
-                  height={44}
+                  width={40}
+                  height={40}
                   priority
                   style={styles.placeholderHeroLogo}
                 />
