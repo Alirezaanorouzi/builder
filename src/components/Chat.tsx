@@ -29,7 +29,10 @@ import {
   type RawActivityInput,
 } from "@/lib/agent-activity";
 import { trackAppOpenOnce, trackProductEvent } from "@/lib/analytics-client";
-import { DEFERRED_DEPLOY_CONFIRMATION } from "@/lib/build-user-messages";
+import {
+  DEFERRED_DEPLOY_CONFIRMATION,
+  GENERIC_BUILD_FAILED,
+} from "@/lib/build-user-messages";
 import { provisioningProgressPercent } from "@/lib/provisioning-progress";
 import { signOutBuilderAccount } from "@/lib/sign-out";
 import {
@@ -42,7 +45,6 @@ import {
   developerPhoneCallHref,
   SUPPORT_TELEGRAM_GROUP_URL,
 } from "@/lib/support-links";
-import { provisionDebugLog } from "@/lib/provision-debug-log";
 
 type ChatItem =
   | {
@@ -394,7 +396,6 @@ export function Chat({ developerPhone = "" }: ChatProps) {
   );
 
   const loadMe = useCallback(async () => {
-    const clientMeT0 = Date.now();
     try {
     const res = await fetch("/api/me");
     if (!res.ok) return null;
@@ -425,11 +426,6 @@ export function Chat({ developerPhone = "" }: ChatProps) {
       }
     }
     trackAppOpenOnce(active?.id);
-    provisionDebugLog("E", "Chat.tsx:loadMe", "client poll", {
-      ms: Date.now() - clientMeT0,
-      siteStatus: active?.status ?? null,
-      provisioningStep: active?.provisioningStep ?? null,
-    });
     return active;
     } finally {
       setMeReady(true);
@@ -600,6 +596,16 @@ export function Chat({ developerPhone = "" }: ChatProps) {
         const seen = getSeenSet(buildRunId);
         if (seen.has(eventId)) return;
         seen.add(eventId);
+        const activeDone =
+          data.status === "queued" ||
+          data.status === "preparing_workspace" ||
+          data.status === "running" ||
+          data.status === "pushing" ||
+          data.status === "deploying";
+        if (activeDone && !data.errorMessage) {
+          // Stale/mis-ordered SSE: run is not terminal — keep listening instead of unlocking send.
+          return;
+        }
         applyRunDone(buildRunId, data);
         return;
       }
@@ -614,10 +620,17 @@ export function Chat({ developerPhone = "" }: ChatProps) {
           status: "failed",
           errorMessage: data.message,
         });
-        if (agentSucceededRunRef.current === buildRunId && data.message) {
-          // Agent finished fine but publishing failed: its activity block is already closed.
-          appendError(data.message);
+        if (data.message) {
+          if (agentSucceededRunRef.current === buildRunId) {
+            // Agent finished fine but publishing failed: its activity block is already closed.
+            appendError(data.message);
+          } else if (data.message === GENERIC_BUILD_FAILED) {
+            appendError(data.message);
+          }
         }
+        setBusy(false);
+        setPreviewPublishing(false);
+        setAwaitingDeployConfirm(false);
         return;
       }
 

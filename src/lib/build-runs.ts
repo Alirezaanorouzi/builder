@@ -213,7 +213,7 @@ export async function createQueuedBuildRun(options: {
   const active = await findAgentExclusiveBuildForSite(options.siteId);
   if (active) {
     throw new HttpError(
-      "The agent is still working on the previous request. Wait a moment or try again.",
+      "هنوز در حال پردازش درخواست قبلی هستیم. چند لحظه صبر کنید و دوباره بفرستید.",
       409
     );
   }

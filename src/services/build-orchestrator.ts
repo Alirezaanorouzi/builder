@@ -6,12 +6,15 @@ import {
   storedImagesToSdk,
 } from "@/lib/prompt-images";
 import {
+  failInterruptedBuildRun,
   publishBuildRunDone,
   publishEngineStreamEvent,
   startBuildRunHeartbeat,
+  TERMINAL_BUILD_STATUSES,
   touchBuildRun,
   updateBuildRunStatus,
 } from "@/lib/build-runs";
+import type { BuildRunStatus } from "@prisma/client";
 import { flushBuildStream, publishBuildStream } from "@/lib/build-stream-bus";
 import { isSameCommit } from "@/lib/preview-gate";
 import { resolveTenantContext } from "@/lib/site-runtime";
@@ -32,6 +35,10 @@ import {
 import type { DeploymentResult } from "@/services/vercel.service";
 import type { TenantContext } from "@engines/types";
 type BuildRunRow = NonNullable<Awaited<ReturnType<typeof updateBuildRunStatus>>>;
+
+function isTerminalBuildStatus(status: BuildRunStatus): boolean {
+  return TERMINAL_BUILD_STATUSES.includes(status);
+}
 
 type RunOutcome = {
   run: BuildRunRow;
@@ -221,7 +228,8 @@ async function withRunLifecycle(
       previewChanged = outcome.previewChanged;
     }
   } catch (e) {
-    console.error("[build] unhandled run error", buildRunId, e);
+    const detail = e instanceof Error ? e.message : String(e);
+    console.error("[build] unhandled run error", buildRunId, detail, e);
     const current = await prisma.buildRun.findUnique({
       where: { id: buildRunId },
       select: { status: true },
@@ -247,17 +255,28 @@ async function withRunLifecycle(
           finishedAt: new Date(),
         });
       } catch (persistErr) {
-        console.error("[build] failed to persist error state", buildRunId, persistErr);
+        console.error("[build] failed to persist error state", buildRunId, persistErr, detail);
+        await failInterruptedBuildRun(buildRunId, GENERIC_BUILD_FAILED);
+        skipTerminalDone = true;
       }
     }
   } finally {
     stopHeartbeat();
     if (!skipTerminalDone) {
-      if (terminalStatus) {
+      if (terminalStatus && isTerminalBuildStatus(terminalStatus.status)) {
         publishBuildRunDone(buildRunId, terminalStatus, { previewChanged });
       } else {
         const latest = await prisma.buildRun.findUnique({ where: { id: buildRunId } });
-        if (latest) publishBuildRunDone(buildRunId, latest, { previewChanged });
+        if (latest && isTerminalBuildStatus(latest.status)) {
+          publishBuildRunDone(buildRunId, latest, { previewChanged });
+        } else if (latest) {
+          console.error(
+            "[build] run still active after lifecycle; marking failed",
+            buildRunId,
+            latest.status
+          );
+          await failInterruptedBuildRun(buildRunId, GENERIC_BUILD_FAILED);
+        }
       }
     }
     await flushBuildStream(buildRunId);
