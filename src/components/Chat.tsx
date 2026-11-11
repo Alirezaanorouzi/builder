@@ -42,6 +42,7 @@ import {
   developerPhoneCallHref,
   SUPPORT_TELEGRAM_GROUP_URL,
 } from "@/lib/support-links";
+import { provisionDebugLog } from "@/lib/provision-debug-log";
 
 type ChatItem =
   | {
@@ -393,6 +394,7 @@ export function Chat({ developerPhone = "" }: ChatProps) {
   );
 
   const loadMe = useCallback(async () => {
+    const clientMeT0 = Date.now();
     try {
     const res = await fetch("/api/me");
     if (!res.ok) return null;
@@ -423,6 +425,11 @@ export function Chat({ developerPhone = "" }: ChatProps) {
       }
     }
     trackAppOpenOnce(active?.id);
+    provisionDebugLog("E", "Chat.tsx:loadMe", "client poll", {
+      ms: Date.now() - clientMeT0,
+      siteStatus: active?.status ?? null,
+      provisioningStep: active?.provisioningStep ?? null,
+    });
     return active;
     } finally {
       setMeReady(true);

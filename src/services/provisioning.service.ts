@@ -6,6 +6,7 @@ import { recordBaselineCommit } from "@/services/preview-commit.service";
 import { createRepoFromTemplate, waitForDefaultBranchHeadSha } from "./github.service";
 import { PlatformHttpError } from "@/lib/platform-fetch";
 import { createVercelProjectForRepo } from "./vercel.service";
+import { provisionDebugLog } from "@/lib/provision-debug-log";
 
 const MAX_TRANSIENT_PROVISIONING_ATTEMPTS = 5;
 
@@ -75,6 +76,7 @@ export async function claimNextProvisioningSite(
  * Caller must hold the DB lease (see claimNextProvisioningSite).
  */
 export async function runSiteProvisioning(siteId: string): Promise<void> {
+  const provRunT0 = Date.now();
   const site = await prisma.site.findUnique({
     where: { id: siteId },
     include: { resources: true },
@@ -101,11 +103,20 @@ export async function runSiteProvisioning(siteId: string): Promise<void> {
   const provisionAttempt = site.resources.provisioningAttempts;
   let retryLeaseMs = 0;
 
+  provisionDebugLog("B", "provisioning.service.ts:runSiteProvisioning:start", "provision run", {
+    siteId,
+    step,
+    provisionAttempt,
+    hasGithub: Boolean(githubFullName),
+    hasVercel: Boolean(site.resources.vercelProjectId),
+  });
+
   try {
     if (
       step === "pending_github_repo" ||
       (!githubFullName && step !== "complete")
     ) {
+      const githubT0 = Date.now();
       const repo = await createRepoFromTemplate({
         repoName,
         description: `${site.displayName} (Website Builder)`,
@@ -124,6 +135,11 @@ export async function runSiteProvisioning(siteId: string): Promise<void> {
         },
       });
       step = "github_repo_created";
+      provisionDebugLog("B", "provisioning.service.ts:github", "github repo ready", {
+        siteId,
+        ms: Date.now() - githubT0,
+        fullName: githubFullName,
+      });
     }
 
     if (githubFullName) {
@@ -138,6 +154,7 @@ export async function runSiteProvisioning(siteId: string): Promise<void> {
           ? waitForDefaultBranchHeadSha(githubFullName, branch)
           : Promise.resolve(null);
 
+        const parallelT0 = Date.now();
         const [baselineSha, project] = await Promise.all([
           baselinePromise,
           createVercelProjectForRepo({
@@ -145,6 +162,12 @@ export async function runSiteProvisioning(siteId: string): Promise<void> {
             githubRepoFullName: githubFullName,
           }),
         ]);
+        provisionDebugLog("C,D", "provisioning.service.ts:vercel+baseline", "parallel vercel+baseline done", {
+          siteId,
+          ms: Date.now() - parallelT0,
+          gotBaseline: Boolean(baselineSha),
+          vercelProjectId: project.id,
+        });
 
         if (baselineSha) {
           await recordBaselineCommit(siteId, baselineSha);
@@ -188,6 +211,10 @@ export async function runSiteProvisioning(siteId: string): Promise<void> {
         message: "GitHub + Vercel provisioning complete",
         setActivatedAt: true,
       });
+      provisionDebugLog("B,C,D", "provisioning.service.ts:complete", "provision active", {
+        siteId,
+        totalMs: Date.now() - provRunT0,
+      });
     }
   } catch (e) {
     if (
@@ -226,8 +253,14 @@ export async function processOneProvisioningJob(
   workerId: string,
   leaseMinutes: number
 ): Promise<boolean> {
+  const claimT0 = Date.now();
   const siteId = await claimNextProvisioningSite(workerId, leaseMinutes);
   if (!siteId) return false;
+  provisionDebugLog("A,G", "provisioning.service.ts:claim", "claimed provisioning site", {
+    siteId,
+    claimMs: Date.now() - claimT0,
+    workerId,
+  });
   await runSiteProvisioning(siteId);
   return true;
 }

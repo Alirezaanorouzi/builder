@@ -27,7 +27,12 @@ const minutesAgo = Math.max(1, Number(process.env.LIARA_LOGS_MINUTES_AGO || 60) 
 const limit = Math.max(1, Math.min(5000, Number(process.env.LIARA_LOGS_LIMIT || 200) || 200));
 const base =
   (process.env.LIARA_API_BASE || "https://api.iran.liara.ir").trim().replace(/\/$/, "");
-const releaseTag = (process.argv[2] || "").trim();
+const args = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+const flags = new Set(process.argv.slice(2).filter((a) => a.startsWith("--")));
+const releaseTag = (args[0] || "").trim();
+const lineMatch = flags.has("--provision")
+  ? "provision-debug"
+  : (process.env.LIARA_LOGS_MATCH || args[1] || "").trim();
 
 if (!token) {
   console.error("Set LIARA_API_TOKEN or LIARA_API_KEY in .env.local");
@@ -91,6 +96,7 @@ if (!lines.length) {
   process.exit(0);
 }
 for (const l of lines.slice(-limit)) {
+  if (lineMatch && !l.line.includes(lineMatch)) continue;
   const iso = new Date(Number(l.ts / 1000000n)).toISOString();
   console.log(`${iso} [${l.tag}] ${l.line}`);
 }

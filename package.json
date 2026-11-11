@@ -21,6 +21,7 @@
     "sync:template-github": "node scripts/sync-template-github.mjs",
     "sync:template-github:push": "node scripts/sync-template-github.mjs --push",
     "logs:liara": "node scripts/liara-logs-api.mjs",
+    "logs:liara:prov": "node scripts/liara-logs-api.mjs --provision",
     "status:liara": "node scripts/liara-app-status.mjs",
     "deploy:liara": "node scripts/liara-deploy.mjs",
     "env:liara": "node scripts/liara-sync-env.mjs",

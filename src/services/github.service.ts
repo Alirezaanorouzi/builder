@@ -1,5 +1,6 @@
 import { assertPlatformProvisioningConfig, getPlatformConfig } from "@/lib/config";
 import { platformFetch } from "@/lib/platform-fetch";
+import { provisionDebugLog } from "@/lib/provision-debug-log";
 
 export interface CreatedGitHubRepo {
   id: number;
@@ -207,10 +208,18 @@ export async function waitForDefaultBranchHeadSha(
   const maxAttempts = options?.maxAttempts ?? 24;
   const delayMs = options?.delayMs ?? 1500;
   let lastError: Error | undefined;
+  const waitT0 = Date.now();
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      return await getDefaultBranchHeadSha(repoFullName, branch);
+      const sha = await getDefaultBranchHeadSha(repoFullName, branch);
+      provisionDebugLog("C", "github.service.ts:waitSha", "baseline sha (ref)", {
+        repoFullName,
+        ms: Date.now() - waitT0,
+        attempt,
+        path: "ref",
+      });
+      return sha;
     } catch (e) {
       lastError = e instanceof Error ? e : new Error(String(e));
       if (!isEmptyOrPendingRepoError(lastError.message) || attempt === maxAttempts - 1) {
@@ -222,7 +231,14 @@ export async function waitForDefaultBranchHeadSha(
 
   for (let attempt = 0; attempt < 6; attempt++) {
     const sha = await getLatestCommitShaOnBranch(repoFullName, branch);
-    if (sha) return sha;
+    if (sha) {
+      provisionDebugLog("C", "github.service.ts:waitSha", "baseline sha (commits list)", {
+        repoFullName,
+        ms: Date.now() - waitT0,
+        path: "commits_fallback",
+      });
+      return sha;
+    }
     await sleep(delayMs);
   }
 

@@ -10,6 +10,7 @@ import {
 import { maybePruneBuildEvents } from "@/lib/build-stream-bus";
 import { kickUsageSync } from "@/services/quota.service";
 import type { BuildRun } from "@prisma/client";
+import { provisionDebugLog } from "@/lib/provision-debug-log";
 
 /** Claim one queued job (Postgres `FOR UPDATE SKIP LOCKED`). */
 export async function claimNextQueuedBuildRun(): Promise<BuildRun | null> {
@@ -80,16 +81,31 @@ export function ensureInlineWorkerLoop() {
 }
 
 export async function processOneWorkerTick(): Promise<boolean> {
-  const { mode, workerId, leaseMinutes } = getWorkerConfig();
+  const { mode, workerId, leaseMinutes, pollMs } = getWorkerConfig();
+  const tickT0 = Date.now();
 
   // Throttled (every few hours per process): drop old live-event rows.
   void maybePruneBuildEvents();
 
   if (mode === "all" || mode === "builds") {
-    if (await processOneBuildJob()) return true;
+    if (await processOneBuildJob()) {
+      provisionDebugLog("A,G", "build-worker.ts:tick", "tick handled build job", {
+        mode,
+        pollMs,
+        tickMs: Date.now() - tickT0,
+      });
+      return true;
+    }
   }
   if (mode === "all" || mode === "provisioning") {
-    if (await processOneProvisioningJob(workerId, leaseMinutes)) return true;
+    if (await processOneProvisioningJob(workerId, leaseMinutes)) {
+      provisionDebugLog("A,G", "build-worker.ts:tick", "tick handled provisioning", {
+        mode,
+        pollMs,
+        tickMs: Date.now() - tickT0,
+      });
+      return true;
+    }
   }
   kickUsageSync();
   return false;
