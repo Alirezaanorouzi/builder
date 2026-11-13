@@ -1,6 +1,13 @@
 "use client";
 
-import { FormEvent, Suspense, useEffect, useState, type CSSProperties } from "react";
+import {
+  FormEvent,
+  Suspense,
+  useEffect,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { authClient } from "@/lib/auth-client";
 import { signOutBuilderAccount } from "@/lib/sign-out";
@@ -83,7 +90,7 @@ function SignInPageInner() {
         {error && <p style={{ color: "#ffb4b4", fontSize: 14 }}>{error}</p>}
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 24 }}>
           <button type="button" style={buttonStyle} onClick={() => router.push("/")}>
-            رفتن به سازنده
+            رفتن به بیلدر
           </button>
           <button
             type="button"
@@ -105,44 +112,50 @@ function SignInPageInner() {
 
   return (
     <div className="app-sign-in" style={{ paddingTop: 48 }}>
-      <h1 style={{ fontSize: 22, fontWeight: 600 }}>
-        {mode === "sign-in" ? "ورود" : "ساخت حساب"}
+      <h1 style={titleStyle}>
+        {mode === "sign-in" ? "ورود به بیلدر" : "ایجاد حساب در بیلدر"}
       </h1>
-      <p style={{ color: "var(--muted)", fontSize: 14, lineHeight: 1.6 }}>
-        با ایمیل و رمز عبور (حداقل ۸ کاراکتر). بعد از ثبت‌نام، سایت شما خودکار ساخته می‌شود.
-      </p>
       <form
         onSubmit={(e) => void onSubmit(e)}
-        style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 24 }}
+        style={{ display: "flex", flexDirection: "column", gap: 16, marginTop: 28 }}
       >
         {mode === "sign-up" && (
+          <AuthField label="نام">
+            <input
+              type="text"
+              name="name"
+              autoComplete="name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              style={inputStyle}
+            />
+          </AuthField>
+        )}
+        <AuthField label="ایمیل">
           <input
-            type="text"
-            placeholder="نام"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
+            type="email"
+            name="email"
+            autoComplete="email"
+            required
+            dir="ltr"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
             style={inputStyle}
           />
-        )}
-        <input
-          type="email"
-          placeholder="ایمیل"
-          required
-          dir="ltr"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          style={inputStyle}
-        />
-        <input
-          type="password"
-          placeholder="رمز عبور (حداقل ۸ کاراکتر)"
-          required
-          minLength={8}
-          dir="ltr"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          style={inputStyle}
-        />
+        </AuthField>
+        <AuthField label="رمز عبور">
+          <input
+            type="password"
+            name="password"
+            autoComplete={mode === "sign-in" ? "current-password" : "new-password"}
+            required
+            minLength={8}
+            dir="ltr"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            style={inputStyle}
+          />
+        </AuthField>
         {error && <p style={{ color: "#ffb4b4", fontSize: 14 }}>{error}</p>}
         <button type="submit" disabled={busy} style={buttonStyle}>
           {busy ? "…" : mode === "sign-in" ? "ورود" : "ثبت‌نام"}
@@ -173,7 +186,40 @@ export default function SignInPage() {
   );
 }
 
+function AuthField({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label style={fieldStyle}>
+      <span style={fieldLabelStyle}>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+const titleStyle: CSSProperties = {
+  margin: 0,
+  fontSize: 22,
+  fontWeight: 600,
+  textAlign: "right",
+  lineHeight: 1.4,
+};
+
+const fieldStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "stretch",
+  gap: 6,
+};
+
+const fieldLabelStyle: CSSProperties = {
+  margin: 0,
+  fontSize: 14,
+  fontWeight: 500,
+  color: "var(--muted)",
+  textAlign: "right",
+};
+
 const inputStyle: CSSProperties = {
+  width: "100%",
   padding: 12,
   borderRadius: 12,
   border: "1px solid var(--border)",
